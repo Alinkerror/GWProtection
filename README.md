@@ -6,9 +6,9 @@ A premium, locally-hosted web application designed to securely backup and protec
 
 This project is built using a modern separation-of-concerns architecture:
 
-*   **Frontend**: A Vanilla JavaScript Single Page Application (SPA) scaffolded with Vite. It features a rich, dark-mode glassmorphism UI for interacting with Google APIs effortlessly.
-*   **Backend**: A fast, asynchronous Python API built with `FastAPI`.
-*   **Database**: A local `SQLite` database managed seamlessly through `SQLAlchemy` to track user profiles and backup job statuses.
+*   **Frontend**: A Vanilla JavaScript Single Page Application (SPA) featuring a persistent Sidebar App Shell. It features a rich, dark-mode glassmorphism UI using `Chart.js` for storage analytics.
+*   **Backend**: A multi-threaded Python API built with `FastAPI` (using standard `def` background tasks for non-blocking I/O).
+*   **Database**: A local `SQLite` database managed seamlessly through `SQLAlchemy` to track user profiles, unique backup job identifiers, and storage metadata.
 *   **Authentication**: Secure Google OAuth 2.0 flow initiated locally using the `google-auth-oauthlib` library.
 
 ### Communication Flow
@@ -28,14 +28,22 @@ This project is built using a modern separation-of-concerns architecture:
     *   The user selects specific files or emails using checkboxes on the frontend UI and hits "Backup Now".
     *   The frontend makes a `POST /jobs/` request holding exactly which IDs to fetch.
     *   FastAPI intercepts the request and offloads the deep recursive download task to a background thread (`BackgroundTasks`).
-    *   The frontend polls `GET /jobs/` every 3 seconds to report the `RUNNING` or `COMPLETED` local status back to the user intuitively.
+    *   The frontend automatically navigates to the **Dashboard** and polls `GET /jobs/` every 3 seconds to report status.
+
+4.  **Usage & Analytics**:
+    *   Data sizes are calculated on-the-fly by the backend walking the local `backups/` directory.
+    *   `GET /usage/` returns a chronological series of storage footprints (MB) rendered as a premium line graph on the frontend.
+
+5.  **Job Expiration**:
+    *   Users can "Expire" backups from the Dashboard action menu.
+    *   `DELETE /jobs/{id}` triggers a recursive `shutil.rmtree` on the backend, purging physical files and database rows simultaneously.
 
 ## Important Components
 
-*   **`backend/main.py`**: The central router for the application. Evaluates CORS middleware, configures the SQLite dependency injection, and contains HTTP routes for job creation, status polling, and API proxying.
-*   **`backend/services.py`**: The core business logic engine. It manages OAuth flows using PKCE states, retrieves hierarchical structures from Google Drive and Gmail via `google-api-python-client`, handles `.eml` raw base64 decoding, automatically converts Google Docs/Sheets into Microsoft Office readable formats (`.docx`, `.xlsx`), and iteratively recreates the user's authentic Google folder hierarchy natively onto their hard drive via `os.makedirs`.
-*   **`backend/models.py` & `schemas.py`**: Defines the database schema structures (using SQLAlchemy primitives) and API payload validation classes (using Pydantic models).
-*   **`frontend/src/main.js`**: The brains of the UI view logic. Handles asynchronous Fetch API polling, builds isolated components (like the GDrive and Gmail browser modals) directly into the DOM, parses OAuth parameter injection, and keeps track of internal Checkbox selection sets (`Set()`).
+*   **`backend/main.py`**: The central router for the application. Evaluates CORS middleware, configures the SQLite dependency injection, and contains HTTP routes for job creation, status polling, and API proxying. Now includes robust `DELETE` hooks for job expiration and `GET /usage` for analytics.
+*   **`backend/services.py`**: The core business logic engine. It manages OAuth flows using PKCE states, retrieves hierarchical structures from Google Drive and Gmail via `google-api-python-client`.
+*   **`backend/models.py` & `schemas.py`**: Defines the database schema structures (using SQLAlchemy primitives) and API payload validation classes (using Pydantic models). Upgraded for Pydantic V2 compatibility (`from_attributes`).
+*   **`frontend/src/main.js`**: The brains of the UI view logic. Handles SPA routing for the Sidebar, Chart.js rendering for the Usage graph, and modal-based file browsing.
 
 ## Folder Structure
 
