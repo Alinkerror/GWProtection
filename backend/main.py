@@ -4,11 +4,12 @@ from sqlalchemy.orm import Session
 from typing import List
 import os
 import json
+import shutil
 from dotenv import load_dotenv
 import models
 import schemas
 import services
-from database import engine, get_db
+from database import engine, get_db, SessionLocal
 
 load_dotenv()
 
@@ -58,34 +59,61 @@ def exchange_code(code: str, email: str, redirect_uri: str, db: Session = Depend
 def list_accounts(db: Session = Depends(get_db)):
     return db.query(models.Account).all()
 
-async def run_backup_job(job_id: int, account_id: int, db: Session):
-    job = db.query(models.Job).filter(models.Job.id == job_id).first()
-    account = db.query(models.Account).filter(models.Account.id == account_id).first()
-    if not job or not account:
-        return
+async def run_backup_job(job_id: int, account_id: int):
+    # Log startup
+    print(f"Starting background job {job_id} for account {account_id}")
     
-    job.status = models.JobStatus.RUNNING
-    db.commit()
-
-    dest_dir = os.path.join("backups", str(account.id), job.job_type.value)
-    os.makedirs(dest_dir, exist_ok=True)
-
+    # 1. Update status to RUNNING
+    db = SessionLocal()
     try:
+        job = db.query(models.Job).filter(models.Job.id == job_id).first()
+        account = db.query(models.Account).filter(models.Account.id == account_id).first()
+        if not job or not account:
+            return
+        
+        job.status = models.JobStatus.RUNNING
+        db.commit()
+        creds = account.credentials_json
+        job_type = job.job_type
         sel_ids = json.loads(job.selected_ids) if job.selected_ids else None
-        
-        if job.job_type == models.JobType.GDRIVE:
-            result = await services.backup_gdrive(account.credentials_json, dest_dir, sel_ids)
-        elif job.job_type == models.JobType.GMAIL:
-            result = await services.backup_gmail(account.credentials_json, dest_dir, sel_ids)
-        
-        job.status = models.JobStatus.COMPLETED
-        job.destination_path = dest_dir
-        job.completed_at = models.func.now()
-    except Exception as e:
-        job.status = models.JobStatus.FAILED
-        job.error_message = str(e)
+    finally:
+        db.close()
+
+    # 2. Run the actual backup (NO active DB session here)
+    dest_dir = os.path.join("backups", str(account_id), f"{job_type.value}_{job_id}")
+    os.makedirs(dest_dir, exist_ok=True)
     
-    db.commit()
+    try:
+        if job_type == models.JobType.GDRIVE:
+            await services.backup_gdrive(creds, dest_dir, sel_ids)
+        elif job_type == models.JobType.GMAIL:
+            await services.backup_gmail(creds, dest_dir, sel_ids)
+        
+        # 3. Success: Refresh and update
+        db = SessionLocal()
+        try:
+            job = db.query(models.Job).filter(models.Job.id == job_id).first()
+            if job:
+                job.status = models.JobStatus.COMPLETED
+                job.destination_path = dest_dir
+                job.completed_at = models.func.now()
+                db.commit()
+        finally:
+            db.close()
+            
+    except Exception as e:
+        print(f"Error in job {job_id}: {str(e)}")
+        db = SessionLocal()
+        try:
+            job = db.query(models.Job).filter(models.Job.id == job_id).first()
+            if job:
+                job.status = models.JobStatus.FAILED
+                job.error_message = str(e)
+                db.commit()
+        finally:
+            db.close()
+    finally:
+        db.close()
 
 @app.get("/gdrive/files/")
 def get_gdrive_files(account_id: int, parent_id: str = "root", page_token: str = None, db: Session = Depends(get_db)):
@@ -126,7 +154,7 @@ def create_job(account_id: int, job: schemas.JobCreate, background_tasks: Backgr
     db.commit()
     db.refresh(db_job)
     
-    background_tasks.add_task(run_backup_job, db_job.id, account.id, db)
+    background_tasks.add_task(run_backup_job, db_job.id, account.id)
     
     return db_job
 
@@ -140,3 +168,56 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: int, db: Session = Depends(get_db)):
+    print(f"Request to delete job {job_id}")
+    job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not job:
+        print(f"Job {job_id} not found in DB")
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    path = job.destination_path
+    if path and os.path.exists(path):
+        print(f"Deleting directory: {path}")
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        print(f"No directory found at {path} to delete")
+        
+    db.delete(job)
+    db.commit()
+    print(f"Job {job_id} deleted successfully from DB")
+    return {"status": "success", "message": "Job expired and deleted."}
+
+@app.get("/usage/")
+def get_usage(db: Session = Depends(get_db)):
+    jobs = db.query(models.Job).filter(models.Job.status == models.JobStatus.COMPLETED).all()
+    usage_by_date = {}
+    
+    def get_dir_size(path):
+        total = 0
+        try:
+            for dirpath, dirnames, filenames in os.walk(path):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    if not os.path.islink(fp):
+                        total += os.path.getsize(fp)
+        except Exception:
+            pass
+        return total
+
+    for job in jobs:
+        dt = job.completed_at if job.completed_at else job.created_at
+        dt_str = dt.strftime('%Y-%m-%d')
+        
+        bytes_used = 0
+        if job.destination_path and os.path.exists(job.destination_path):
+            bytes_used = get_dir_size(job.destination_path)
+            
+        if dt_str not in usage_by_date:
+            usage_by_date[dt_str] = 0
+        usage_by_date[dt_str] += bytes_used
+        
+    data = [{"date": d, "mb": round(b / (1024 * 1024), 2)} for d, b in usage_by_date.items()]
+    data.sort(key=lambda x: x["date"])
+    return data

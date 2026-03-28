@@ -5,10 +5,9 @@ from models import JobStatus, JobType
 
 class JobBase(BaseModel):
     job_type: JobType
-    selected_ids: Optional[list[str]] = None
 
 class JobCreate(JobBase):
-    pass
+    selected_ids: Optional[list[str]] = None
 
 class JobResponse(JobBase):
     id: int
@@ -19,11 +18,11 @@ class JobResponse(JobBase):
     error_message: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class AccountResponse(BaseModel):
     id: int
     email: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True

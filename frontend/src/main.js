@@ -23,8 +23,7 @@ async function init() {
     alert('Authentication failed: ' + error);
     renderLogin();
   } else if (accountId) {
-    // Already logged in
-    renderDashboard();
+    renderAppShell();
   } else {
     // Show login page
     renderLogin();
@@ -42,12 +41,12 @@ async function handleAuthExchange(code) {
     });
     const data = await response.json();
     
-    if (response.ok && data.account_id) {
+    if (response.ok) {
       accountId = data.account_id;
       localStorage.setItem('gwp_account_id', accountId);
       // Clean up URL
       window.history.replaceState({}, document.title, window.location.pathname);
-      renderDashboard();
+      renderAppShell();
     } else {
       throw new Error(data.detail || data.error || 'Authentication failed');
     }
@@ -107,49 +106,217 @@ function renderLogin() {
   });
 }
 
-function renderDashboard() {
+function renderAppShell(activeTab = 'dashboard') {
+  document.body.classList.add('app-mode');
+  
   appDiv.innerHTML = `
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-      <div>
-        <h1>Dashboard</h1>
-        <p class="subtitle" style="margin-bottom: 0;">Manage your backups</p>
-      </div>
-      <button id="logoutBtn" class="btn btn-secondary">Logout</button>
-    </div>
-
-    <div class="dashboard-grid">
-      <div class="panel">
-        <h2>Google Drive</h2>
-        <p class="subtitle">Backup all files and folders</p>
-        <button id="backupDriveBtn" class="btn">Backup Now</button>
-      </div>
-      
-      <div class="panel">
-        <h2>Gmail</h2>
-        <p class="subtitle">Backup emails and attachments</p>
-        <button id="backupGmailBtn" class="btn">Backup Now</button>
-      </div>
-    </div>
-
-    <div class="job-list" id="jobContainers">
-      <h2>Recent Jobs</h2>
-      <div id="jobsListContainer">Loading jobs...</div>
+    <div class="app-container">
+      <nav class="sidebar">
+        <div class="sidebar-title">GWP Studio</div>
+        <div class="sidebar-nav">
+          <div class="nav-item ${activeTab === 'dashboard' ? 'active' : ''}" onclick="showTab('dashboard')">
+            📊 Dashboard
+          </div>
+          <div class="nav-item ${activeTab === 'backup' ? 'active' : ''}" onclick="showTab('backup')">
+            ☁️ Backup
+          </div>
+          <div class="nav-item ${activeTab === 'usage' ? 'active' : ''}" onclick="showTab('usage')">
+            📈 Usage
+          </div>
+          <div class="nav-item logout-nav-item" onclick="logout()">
+            🚪 Log out
+          </div>
+        </div>
+      </nav>
+      <main class="main-content" id="mainContentArea"></main>
     </div>
   `;
+  
+  showTabContent(activeTab);
+}
 
-  document.getElementById('logoutBtn').addEventListener('click', () => {
-    localStorage.removeItem('gwp_account_id');
-    accountId = null;
-    if (jobsPollingInterval) clearInterval(jobsPollingInterval);
-    renderLogin();
-  });
+window.showTab = function(tab) {
+  renderAppShell(tab);
+}
 
+window.logout = function() {
+  localStorage.removeItem('gwp_account_id');
+  accountId = null;
+  document.body.classList.remove('app-mode');
+  if (jobsPollingInterval) clearInterval(jobsPollingInterval);
+  renderLogin();
+}
+
+function showTabContent(tab) {
+  const container = document.getElementById('mainContentArea');
+  if (tab === 'dashboard') {
+    renderDashboardView(container);
+  } else if (tab === 'backup') {
+    renderBackupView(container);
+  } else if (tab === 'usage') {
+    renderUsageView(container);
+  }
+}
+
+function renderDashboardView(container) {
+  container.innerHTML = `
+    <div class="panel">
+      <h1>Dashboard</h1>
+      <div class="subtitle">Connected Account ID: ${accountId}</div>
+      <h3>Recent Jobs</h3>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Job ID</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Finished At</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="dashboardTableBody">
+          <tr><td colspan="5" style="text-align:center;">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+  
+  fetchJobsAndPopulateTable();
+  if (jobsPollingInterval) clearInterval(jobsPollingInterval);
+  jobsPollingInterval = setInterval(fetchJobsAndPopulateTable, 3000);
+}
+
+async function fetchJobsAndPopulateTable() {
+  try {
+    const response = await fetch(`${API_BASE}/jobs/`);
+    if (response.ok) {
+      const jobsData = await response.json();
+      const tbody = document.getElementById('dashboardTableBody');
+      if (!tbody) return; 
+      
+      if (jobsData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 2rem; color: var(--text-secondary);">No jobs found. Navigate to Backup to start one.</td></tr>`;
+        return;
+      }
+      
+      tbody.innerHTML = jobsData.map(job => {
+        const timeFinished = job.completed_at ? new Date(job.completed_at).toLocaleString() : '-';
+        return `
+          <tr>
+            <td>#${job.id}</td>
+            <td>${job.job_type}</td>
+            <td><span class="status-badge status-${job.status.toLowerCase()}">${job.status}</span></td>
+            <td>${timeFinished}</td>
+            <td>
+              <div class="action-menu" onclick="event.stopPropagation(); toggleDropdown(${job.id})">
+                <button class="action-btn">⋮</button>
+                <div class="dropdown-content" id="dropdown-${job.id}">
+                  <button class="dropdown-item" onclick="expireBackup(${job.id})">Expire Backup</button>
+                </div>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+window.toggleDropdown = function(id) {
+  document.querySelectorAll('.dropdown-content').forEach(el => el.classList.remove('show'));
+  const el = document.getElementById(`dropdown-${id}`);
+  if (el) el.classList.toggle('show');
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.dropdown-content').forEach(el => el.classList.remove('show'));
+});
+
+window.expireBackup = async function(jobId) {
+  if(!confirm("Are you sure you want to expire and delete this backup entirely from local storage?")) return;
+  try {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}`, { method: 'DELETE' });
+    if(res.ok) fetchJobsAndPopulateTable();
+  } catch (e) {
+    alert("Error deleting job.");
+  }
+}
+
+function renderBackupView(container) {
+  if (jobsPollingInterval) clearInterval(jobsPollingInterval);
+  
+  container.innerHTML = `
+    <div class="panel">
+      <h1>New Backup</h1>
+      <div class="subtitle">Select a service to start an interactive backup session</div>
+      <div class="dashboard-grid" style="margin-top: 0;">
+        <div class="panel" style="background: rgba(0,0,0,0.2);">
+          <h3>Google Drive</h3>
+          <p style="color:var(--text-secondary); margin-bottom: 1.5rem;">Backup selective Google Docs, Sheets, and hierarchical folders natively.</p>
+          <button class="btn" id="backupDriveBtn">Browse GDrive & Backup</button>
+        </div>
+        <div class="panel" style="background: rgba(0,0,0,0.2);">
+          <h3>Gmail</h3>
+          <p style="color:var(--text-secondary); margin-bottom: 1.5rem;">Backup raw .eml emails preserving native attachments spanning your inbox.</p>
+          <button class="btn" id="backupGmailBtn">Browse Gmail & Backup</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
   document.getElementById('backupDriveBtn').addEventListener('click', openDriveBrowser);
   document.getElementById('backupGmailBtn').addEventListener('click', openGmailBrowser);
+}
 
-  fetchJobs();
+function renderUsageView(container) {
   if (jobsPollingInterval) clearInterval(jobsPollingInterval);
-  jobsPollingInterval = setInterval(fetchJobs, 3000);
+  
+  container.innerHTML = `
+    <div class="panel">
+      <h1>Storage Usage</h1>
+      <div class="subtitle">Track your historical backup footprint over time</div>
+      <div style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 1rem; border: 1px solid var(--border-color);">
+        <canvas id="usageChart" height="100"></canvas>
+      </div>
+    </div>
+  `;
+  
+  loadUsageGraph();
+}
+
+async function loadUsageGraph() {
+  try {
+    const res = await fetch(`${API_BASE}/usage/`);
+    if (res.ok) {
+      const data = await res.json();
+      const labels = data.map(d => new Date(d.date + "T00:00:00").toLocaleDateString());
+      const values = data.map(d => d.mb);
+      
+      new Chart(document.getElementById('usageChart'), {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Local Storage Used (MB)',
+            data: values,
+            backgroundColor: '#58a6ff',
+            borderRadius: 4
+          }]
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+            x: { grid: { display: false }, ticks: { color: '#8b949e' } }
+          },
+          plugins: { legend: { labels: { color: '#c9d1d9' } } }
+        }
+      });
+    }
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 function openDriveBrowser() {
@@ -447,7 +614,7 @@ async function startBackup(jobType, selectedIds = null) {
       body: JSON.stringify(payload)
     });
     if (response.ok) {
-      fetchJobs();
+      showTab('dashboard');
     } else {
       const err = await response.json();
       alert(err.detail || 'Failed to start backup');
@@ -457,37 +624,6 @@ async function startBackup(jobType, selectedIds = null) {
   }
 }
 
-async function fetchJobs() {
-  if (!accountId) return;
-  try {
-    const response = await fetch(`${API_BASE}/jobs/`);
-    const jobs = await response.json();
-    
-    const container = document.getElementById('jobsListContainer');
-    if (!container) return;
-
-    if (jobs.length === 0) {
-      container.innerHTML = '<p class="subtitle">No jobs run yet.</p>';
-      return;
-    }
-
-    container.innerHTML = jobs.map(job => `
-      <div class="job-item">
-        <div>
-          <div style="font-weight: 600; margin-bottom: 0.25rem;">${job.job_type} Backup</div>
-          <div style="font-size: 0.85rem; color: var(--text-secondary);">
-            Started: ${new Date(job.created_at).toLocaleString()}
-          </div>
-          ${job.destination_path ? `<div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Stored locally at: <code>${job.destination_path}</code></div>` : ''}
-          ${job.error_message ? `<div style="font-size: 0.85rem; color: #f85149; margin-top: 0.25rem;">Error: ${job.error_message}</div>` : ''}
-        </div>
-        <div class="status-badge status-${job.status.toLowerCase()}">${job.status}</div>
-      </div>
-    `).join('');
-  } catch(e) {
-    console.warn('Failed to fetch jobs', e);
-  }
-}
 
 // Start application
 init();
