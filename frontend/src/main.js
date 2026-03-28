@@ -295,14 +295,18 @@ async function loadUsageGraph() {
       const values = data.map(d => d.mb);
       
       new Chart(document.getElementById('usageChart'), {
-        type: 'bar',
+        type: 'line',
         data: {
           labels: labels,
           datasets: [{
             label: 'Local Storage Used (MB)',
             data: values,
-            backgroundColor: '#58a6ff',
-            borderRadius: 4
+            borderColor: '#58a6ff',
+            backgroundColor: 'rgba(88, 166, 255, 0.15)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 4,
+            pointBackgroundColor: '#58a6ff'
           }]
         },
         options: {
