@@ -12,6 +12,10 @@ let currentGmailNextPageToken = null;
 let currentGmailQuery = "";
 
 async function init() {
+  // Initialize theme first
+  applyTheme();
+  renderThemeToggle();
+
   const urlParams = new URLSearchParams(window.location.search);
   const code = urlParams.get('code');
   const error = urlParams.get('error');
@@ -28,6 +32,41 @@ async function init() {
     // Show login page
     renderLogin();
   }
+}
+
+// Theme Management
+function applyTheme(theme) {
+  const currentTheme = theme || localStorage.getItem('gwp_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', currentTheme);
+  localStorage.setItem('gwp_theme', currentTheme);
+  
+  const toggle = document.getElementById('theme-checkbox');
+  if (toggle) {
+    toggle.checked = currentTheme === 'light';
+  }
+}
+
+window.toggleTheme = function(e) {
+  const newTheme = e.target.checked ? 'light' : 'dark';
+  applyTheme(newTheme);
+}
+
+function renderThemeToggle() {
+  if (document.querySelector('.theme-switch-wrapper')) return;
+  
+  const wrapper = document.createElement('div');
+  wrapper.className = 'theme-switch-wrapper';
+  wrapper.innerHTML = `
+    <span class="theme-label">🌙</span>
+    <label class="theme-switch" for="theme-checkbox">
+      <input type="checkbox" id="theme-checkbox" onchange="toggleTheme(event)" />
+      <div class="slider round"></div>
+    </label>
+    <span class="theme-label" style="margin-left:10px;">☀️</span>
+  `;
+  document.body.appendChild(wrapper);
+  // Ensure toggle matches current theme
+  applyTheme();
 }
 
 async function handleAuthExchange(code) {
@@ -108,11 +147,16 @@ function renderLogin() {
 
 function renderAppShell(activeTab = 'dashboard') {
   document.body.classList.add('app-mode');
+  // Ensure toggle is visible in case it was removed
+  renderThemeToggle();
   
   appDiv.innerHTML = `
     <div class="app-container">
       <nav class="sidebar">
-        <div class="sidebar-title">GWP Studio</div>
+        <div class="sidebar-title" style="display: flex; align-items: center; gap: 0.4rem;">
+          <span style="background: var(--accent-orange); color: white; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.75rem;">GWP</span>
+          <span style="letter-spacing: 1px; font-size: 0.8rem;">STUDIO</span>
+        </div>
         <div class="sidebar-nav">
           <div class="nav-item ${activeTab === 'dashboard' ? 'active' : ''}" onclick="showTab('dashboard')">
             📊 Dashboard
@@ -252,13 +296,13 @@ function renderBackupView(container) {
       <h1>New Backup</h1>
       <div class="subtitle">Select a service to start an interactive backup session</div>
       <div class="dashboard-grid" style="margin-top: 0;">
-        <div class="panel" style="background: rgba(0,0,0,0.2);">
-          <h3>Google Drive</h3>
+        <div class="panel" style="background: var(--panel-sub-bg); border-radius: 8px;">
+          <h3 style="font-size: 1rem;">Google Drive</h3>
           <p style="color:var(--text-secondary); margin-bottom: 1.5rem;">Backup selective Google Docs, Sheets, and hierarchical folders natively.</p>
           <button class="btn" id="backupDriveBtn">Browse GDrive & Backup</button>
         </div>
-        <div class="panel" style="background: rgba(0,0,0,0.2);">
-          <h3>Gmail</h3>
+        <div class="panel" style="background: var(--panel-sub-bg); border-radius: 8px;">
+          <h3 style="font-size: 1rem;">Gmail</h3>
           <p style="color:var(--text-secondary); margin-bottom: 1.5rem;">Backup raw .eml emails preserving native attachments spanning your inbox.</p>
           <button class="btn" id="backupGmailBtn">Browse Gmail & Backup</button>
         </div>
@@ -277,7 +321,7 @@ function renderUsageView(container) {
     <div class="panel">
       <h1>Storage Usage</h1>
       <div class="subtitle">Track your historical backup footprint over time</div>
-      <div style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 1rem; border: 1px solid var(--border-color);">
+      <div style="background: var(--panel-sub-bg); border-radius: 8px; padding: 1rem; border: 1px solid var(--border-color);">
         <canvas id="usageChart" height="100"></canvas>
       </div>
     </div>
@@ -294,6 +338,12 @@ async function loadUsageGraph() {
       const labels = data.map(d => new Date(d.date + "T00:00:00").toLocaleDateString());
       const values = data.map(d => d.mb);
       
+      const styles = getComputedStyle(document.documentElement);
+      const gridColor = styles.getPropertyValue('--chart-grid-color').trim() || 'rgba(255,255,255,0.05)';
+      const textColor = styles.getPropertyValue('--text-secondary').trim() || '#8b949e';
+      const accentBlue = styles.getPropertyValue('--accent-blue').trim() || '#007aff';
+      const accentOrange = styles.getPropertyValue('--accent-orange').trim() || '#ff8500';
+
       new Chart(document.getElementById('usageChart'), {
         type: 'line',
         data: {
@@ -301,20 +351,28 @@ async function loadUsageGraph() {
           datasets: [{
             label: 'Local Storage Used (MB)',
             data: values,
-            borderColor: '#58a6ff',
-            backgroundColor: 'rgba(88, 166, 255, 0.15)',
+            borderColor: accentBlue,
+            backgroundColor: accentBlue + '1a', // 10% opacity
             fill: true,
             tension: 0.4,
-            pointRadius: 4,
-            pointBackgroundColor: '#58a6ff'
+            pointRadius: 5,
+            pointBackgroundColor: accentOrange,
+            pointBorderColor: '#ffffff'
           }]
         },
         options: {
           scales: {
-            y: { beginAtZero: true, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
-            x: { grid: { display: false }, ticks: { color: '#8b949e' } }
+            y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor } },
+            x: { grid: { display: false }, ticks: { color: textColor } }
           },
-          plugins: { legend: { labels: { color: '#c9d1d9' } } }
+          plugins: { 
+            legend: { 
+              labels: { 
+                color: textColor,
+                font: { family: 'Inter', weight: '600', size: 11 }
+              } 
+            } 
+          }
         }
       });
     }
