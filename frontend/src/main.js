@@ -10,6 +10,7 @@ let currentNextPageToken = null;
 let selectedGmailIds = new Set();
 let currentGmailNextPageToken = null;
 let currentGmailQuery = "";
+let usageChartInstance = null;
 
 async function init() {
   // Initialize theme first
@@ -172,6 +173,9 @@ function renderAppShell(activeTab = 'dashboard') {
           <div class="nav-item ${activeTab === 'backup' ? 'active' : ''}" onclick="showTab('backup')">
             <i>☁️</i> Backup
           </div>
+          <div class="nav-item ${activeTab === 'activity' ? 'active' : ''}" onclick="showTab('activity')">
+            <i>🕒</i> Activity
+          </div>
           <div class="nav-item ${activeTab === 'usage' ? 'active' : ''}" onclick="showTab('usage')">
             <i>📈</i> Usage
           </div>
@@ -226,10 +230,18 @@ window.logout = function() {
 
 function showTabContent(tab) {
   const container = document.getElementById('mainContentArea');
+  // Clean up any existing chart instance before switching tabs
+  if (usageChartInstance) {
+    usageChartInstance.destroy();
+    usageChartInstance = null;
+  }
+  
   if (tab === 'dashboard') {
     renderDashboardView(container);
   } else if (tab === 'backup') {
     renderBackupView(container);
+  } else if (tab === 'activity') {
+    renderActivityView(container);
   } else if (tab === 'usage') {
     renderUsageView(container);
   }
@@ -347,7 +359,8 @@ function renderDashboardView(container) {
 
 async function fetchJobsAndPopulateTable() {
   try {
-    const response = await fetch(`${API_BASE}/jobs/`);
+    // Dashboard only shows the 5 most recent jobs
+    const response = await fetch(`${API_BASE}/jobs/?limit=5`);
     if (response.ok) {
       const jobsData = await response.json();
       const tbody = document.getElementById('dashboardTableBody');
@@ -467,6 +480,163 @@ function renderBackupView(container) {
   document.getElementById('backupGmailBtn').addEventListener('click', openGmailBrowser);
 }
 
+function renderActivityView(container) {
+  container.innerHTML = `
+    <div class="dashboard-header">
+      <div>
+        <h1 class="page-title">Job Activity</h1>
+        <p class="page-subtitle">Historical record of all synchronization and protection tasks.</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-outline" onclick="fetchActivityJobs()">Refresh</button>
+      </div>
+    </div>
+
+    <div class="content-card">
+      <div class="filter-bar" style="margin-bottom: 2rem; display: flex; gap: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem;">
+        <span class="filter-tab active" onclick="filterActivity('ALL', this)">All Jobs</span>
+        <span class="filter-tab" onclick="filterActivity('RUNNING', this)">Running</span>
+        <span class="filter-tab" onclick="filterActivity('COMPLETED', this)">Completed</span>
+        <span class="filter-tab" onclick="filterActivity('FAILED', this)">Failed</span>
+      </div>
+
+      <div style="overflow-x: auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Service</th>
+              <th>Status</th>
+              <th>Started At</th>
+              <th>Finished At</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="activityTableBody">
+            <tr><td colspan="6" style="text-align:center; padding: 2rem;">Loading activity log...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="activityLoadMoreContainer" style="text-align: center; margin-top: 1.5rem; display: none;">
+        <button class="btn btn-outline" onclick="loadMoreActivity()" id="btnLoadMoreActivity">Load More History</button>
+      </div>
+    </div>
+  `;
+
+  activityOffset = 0;
+  hasMoreActivity = true;
+  fetchActivityJobs(false);
+  if (jobsPollingInterval) clearInterval(jobsPollingInterval);
+  jobsPollingInterval = setInterval(() => fetchActivityJobs(true), 3000);
+}
+
+let currentActivityFilter = 'ALL';
+let activityOffset = 0;
+let hasMoreActivity = true;
+let isFetchingActivity = false;
+
+window.filterActivity = function(status, el) {
+  currentActivityFilter = status;
+  activityOffset = 0;
+  hasMoreActivity = true;
+  document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
+  el.classList.add('active');
+  fetchActivityJobs(false);
+}
+
+window.loadMoreActivity = function() {
+  if (isFetchingActivity || !hasMoreActivity) return;
+  activityOffset += 20;
+  fetchActivityJobs(false, true);
+}
+
+async function fetchActivityJobs(isPolling = false, isLoadMore = false) {
+  const tbody = document.getElementById('activityTableBody');
+  if (!tbody) return;
+  
+  // Prevent stacking requests
+  if (isFetchingActivity) {
+    console.log("Activity fetch already in progress, skipping...");
+    return;
+  }
+
+  isFetchingActivity = true;
+  
+  try {
+    const limit = isLoadMore ? 20 : (activityOffset + 20);
+    const offset = isLoadMore ? activityOffset : 0;
+    
+    let url = `${API_BASE}/jobs/?limit=${limit}&offset=${offset}`;
+    const response = await fetch(url);
+    
+    if (response.ok) {
+      let jobsData = await response.json();
+      
+      if (currentActivityFilter !== 'ALL') {
+        jobsData = jobsData.filter(j => j.status === currentActivityFilter);
+      }
+
+      if (!isLoadMore && jobsData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 3rem; color: var(--text-secondary);">No ${currentActivityFilter === 'ALL' ? '' : currentActivityFilter.toLowerCase()} jobs found.</td></tr>`;
+        document.getElementById('activityLoadMoreContainer').style.display = 'none';
+        return;
+      }
+
+      const rowsHtml = jobsData.map(job => {
+        const timeStarted = new Date(job.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+        const timeFinished = job.completed_at ? new Date(job.completed_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'In Progress...';
+        const typeIcon = job.job_type === 'GMAIL' ? '📧' : '☁️';
+        
+        return `
+          <tr>
+            <td><div class="font-bold">#${job.id}</div></td>
+            <td>
+               <div style="display: flex; align-items: center; gap: 0.5rem;">
+                 <div class="service-icon">${typeIcon}</div>
+                 <span>${job.job_type}</span>
+               </div>
+            </td>
+            <td><span class="status-pill ${job.status.toLowerCase()}">${job.status}</span></td>
+            <td><span class="text-muted">${timeStarted}</span></td>
+            <td><span class="text-muted">${timeFinished}</span></td>
+            <td>
+              <div class="action-menu" onclick="event.stopPropagation(); toggleDropdown(${job.id})">
+                <button class="action-btn">⋮</button>
+                <div class="dropdown-content" id="dropdown-${job.id}">
+                   <button class="dropdown-item" onclick="expireBackup(${job.id})">Delete Permanent</button>
+                </div>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      if (isLoadMore) {
+        tbody.innerHTML += rowsHtml;
+      } else {
+        tbody.innerHTML = rowsHtml;
+      }
+
+      hasMoreActivity = jobsData.length === limit;
+      const loadMoreBtn = document.getElementById('activityLoadMoreContainer');
+      if (loadMoreBtn) loadMoreBtn.style.display = hasMoreActivity ? 'block' : 'none';
+
+    } else {
+      console.error("Activity API error:", response.status);
+      if (!isPolling && !isLoadMore) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 2rem; color: var(--error-color);">Failed to load activity (Error ${response.status}). <a href="#" onclick="fetchActivityJobs()">Retry</a></td></tr>`;
+      }
+    }
+  } catch (e) {
+    console.error("Activity fetch exception:", e);
+    if (!isPolling && !isLoadMore) {
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 2rem; color: var(--error-color);">Connection error. Please check if the server is running. <a href="#" onclick="fetchActivityJobs()">Retry</a></td></tr>`;
+    }
+  } finally {
+    isFetchingActivity = false;
+  }
+}
+
 function renderUsageView(container) {
   if (jobsPollingInterval) clearInterval(jobsPollingInterval);
   
@@ -480,61 +650,99 @@ function renderUsageView(container) {
 
     <div class="content-card">
       <div class="card-header">
-        <h3>Protection History (MB)</h3>
-        <div class="text-muted" style="font-size: 0.8rem;">Data synchronized to local volume</div>
+        <h3>Protection History</h3>
+        <div class="text-muted" style="font-size: 0.8rem;">Local storage usage over time (MB)</div>
       </div>
-      <div style="height: 400px; position: relative;">
+      <div style="height: 400px; position: relative; width: 100%;">
         <canvas id="usageChart"></canvas>
       </div>
     </div>
   `;
   
-  loadUsageGraph();
+  setTimeout(loadUsageGraph, 0);
 }
 
 async function loadUsageGraph() {
+  const canvas = document.getElementById('usageChart');
+  if (!canvas) return;
+
   try {
     const res = await fetch(`${API_BASE}/usage/`);
     if (res.ok) {
       const data = await res.json();
-      const labels = data.map(d => new Date(d.date + "T00:00:00").toLocaleDateString());
+      
+      if (data.length === 0) {
+        canvas.parentElement.innerHTML = '<div style="height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-muted);">No usage data recorded yet.</div>';
+        return;
+      }
+
+      const labels = data.map(d => {
+        const date = new Date(d.date + "T00:00:00");
+        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      });
       const values = data.map(d => d.mb);
       
       const styles = getComputedStyle(document.documentElement);
-      const gridColor = styles.getPropertyValue('--chart-grid-color').trim() || 'rgba(255,255,255,0.05)';
-      const textColor = styles.getPropertyValue('--text-secondary').trim() || '#8b949e';
-      const accentBlue = styles.getPropertyValue('--accent-blue').trim() || '#007aff';
-      const accentOrange = styles.getPropertyValue('--accent-orange').trim() || '#ff8500';
+      const gridColor = 'rgba(0,0,0,0.05)';
+      const textColor = styles.getPropertyValue('--text-secondary').trim() || '#64748b';
+      const accentGreen = '#14532d';
 
-      new Chart(document.getElementById('usageChart'), {
+      if (usageChartInstance) {
+        usageChartInstance.destroy();
+      }
+
+      usageChartInstance = new Chart(canvas, {
         type: 'line',
         data: {
           labels: labels,
           datasets: [{
-            label: 'Local Storage Used (MB)',
+            label: 'Total Usage (MB)',
             data: values,
-            borderColor: '#14532d',
-            backgroundColor: 'rgba(20, 83, 45, 0.05)',
+            borderColor: accentGreen,
+            backgroundColor: 'rgba(20, 83, 45, 0.08)',
             fill: true,
             tension: 0.4,
-            pointRadius: 6,
-            pointBackgroundColor: '#22c55e',
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: accentGreen,
             pointBorderColor: '#ffffff',
             pointBorderWidth: 2
           }]
         },
         options: {
-          scales: {
-            y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor } },
-            x: { grid: { display: false }, ticks: { color: textColor } }
-          },
+          responsive: true,
+          maintainAspectRatio: false,
           plugins: { 
             legend: { 
-              labels: { 
+              display: false 
+            },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              padding: 12,
+              titleFont: { family: 'Inter', size: 13 },
+              bodyFont: { family: 'Inter', size: 13 },
+              callbacks: {
+                label: (context) => ` ${context.parsed.y} MB`
+              }
+            }
+          },
+          scales: {
+            y: { 
+              beginAtZero: true, 
+              grid: { color: gridColor, drawBorder: false }, 
+              ticks: { 
                 color: textColor,
-                font: { family: 'Inter', weight: '600', size: 11 }
+                font: { family: 'Inter', size: 11 },
+                callback: (value) => value + ' MB'
               } 
-            } 
+            },
+            x: { 
+              grid: { display: false }, 
+              ticks: { 
+                color: textColor,
+                font: { family: 'Inter', size: 11 }
+              } 
+            }
           }
         }
       });
@@ -675,10 +883,10 @@ async function loadGmailMessages(queryStr = "", loadMore = false) {
       const div = document.createElement('div');
       div.className = `file-row ${isSelected ? 'selected' : ''}`;
       div.innerHTML = `
-        <div style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 2px solid var(--border-color); border-radius: 6px; background: white;">
-          ${isSelected ? '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>' : ''}
+        <div class="checkbox-container">
+          ${isSelected ? '<span class="check-mark">✓</span>' : ''}
         </div>
-        <div style="flex:1; overflow:hidden; min-width: 0;">
+        <div class="file-info" style="flex:1; overflow:hidden; min-width: 0;">
           <div style="font-weight: 600; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; margin-bottom: 0.2rem;">${msg.subject}</div>
           <div style="font-size: 0.75rem; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">From: ${msg.from}</div>
         </div>
@@ -687,7 +895,7 @@ async function loadGmailMessages(queryStr = "", loadMore = false) {
         </div>
       `;
       
-      div.addEventListener('click', () => {
+      div.addEventListener('click', (e) => {
         toggleGmailSelection(msg.id, div);
       });
       
@@ -710,16 +918,15 @@ async function loadGmailMessages(queryStr = "", loadMore = false) {
 }
 
 function toggleGmailSelection(fileId, itemDiv) {
+  const checkbox = itemDiv.querySelector('.checkbox-container');
   if (selectedGmailIds.has(fileId)) {
     selectedGmailIds.delete(fileId);
     itemDiv.classList.remove('selected');
-    const check = itemDiv.querySelector('span');
-    if (check) check.remove();
+    checkbox.innerHTML = '';
   } else {
     selectedGmailIds.add(fileId);
     itemDiv.classList.add('selected');
-    const checkContainer = itemDiv.querySelector('div');
-    checkContainer.innerHTML = '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>';
+    checkbox.innerHTML = '<span class="check-mark">✓</span>';
   }
   updateGmailSelectionCount();
 }
@@ -774,13 +981,20 @@ async function loadDriveFolder(folderId, loadMore = false) {
       const div = document.createElement('div');
       div.className = `file-row ${isSelected ? 'selected' : ''}`;
       div.innerHTML = `
-        <div style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 2px solid var(--border-color); border-radius: 6px; background: white;">
-          ${isSelected ? '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>' : ''}
+        <div class="checkbox-container">
+          ${isSelected ? '<span class="check-mark">✓</span>' : ''}
         </div>
         <div class="service-icon" style="width: 32px; height: 32px; font-size: 1rem; border-radius: 8px;">${icon}</div>
         <div class="file-name">${file.name}</div>
       `;
       
+      // Checkbox specific click
+      div.querySelector('.checkbox-container').addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleSelection(file.id, div);
+      });
+
+      // Row click
       div.addEventListener('click', () => {
         if (isFolder) {
           currentDrivePath.push({ id: file.id, name: file.name });
@@ -798,7 +1012,7 @@ async function loadDriveFolder(folderId, loadMore = false) {
       const loadBtn = document.createElement('div');
       loadBtn.id = 'loadMoreBtn';
       loadBtn.className = 'load-more-btn';
-      loadBtn.innerText = 'Load More Responses...';
+      loadBtn.innerText = 'Load More Files...';
       loadBtn.onclick = () => loadDriveFolder(folderId, true);
       listContainer.appendChild(loadBtn);
     }
@@ -809,16 +1023,15 @@ async function loadDriveFolder(folderId, loadMore = false) {
 }
 
 function toggleSelection(fileId, itemDiv) {
+  const checkbox = itemDiv.querySelector('.checkbox-container');
   if (selectedDriveFiles.has(fileId)) {
     selectedDriveFiles.delete(fileId);
     itemDiv.classList.remove('selected');
-    const check = itemDiv.querySelector('span');
-    if (check) check.remove();
+    checkbox.innerHTML = '';
   } else {
     selectedDriveFiles.add(fileId);
     itemDiv.classList.add('selected');
-    const checkContainer = itemDiv.querySelector('div');
-    checkContainer.innerHTML = '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>';
+    checkbox.innerHTML = '<span class="check-mark">✓</span>';
   }
   updateSelectionCount();
 }

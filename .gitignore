@@ -1,4 +1,10 @@
-backend/backups
-backend/gwp_app.db
+backend/backups/
+backend/gwp.db
 .env
 backend/.env
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+node_modules/
+dist/

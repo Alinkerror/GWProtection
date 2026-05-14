@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 from typing import List
 import os
 import json
@@ -56,11 +57,13 @@ def exchange_code(code: str, email: str, redirect_uri: str, db: Session = Depend
 def list_accounts(db: Session = Depends(get_db)):
     return db.query(models.Account).all()
 
-async def run_backup_job(job_id: int, account_id: int):
+def run_backup_job(job_id: int, account_id: int):
     # Log startup
     print(f"Starting background job {job_id} for account {account_id}")
     
-    # 1. Update status to RUNNING
+    import asyncio
+    
+    # 1. Get initial data
     db = SessionLocal()
     try:
         job = db.query(models.Job).filter(models.Job.id == job_id).first()
@@ -68,33 +71,45 @@ async def run_backup_job(job_id: int, account_id: int):
         if not job or not account:
             return
         
-        job.status = models.JobStatus.RUNNING
-        db.commit()
         creds = account.credentials_json
         job_type = job.job_type
         sel_ids = json.loads(job.selected_ids) if job.selected_ids else None
     finally:
         db.close()
 
-    # 2. Run the actual backup (NO active DB session here)
+    # 2. Run the actual backup (This is blocking work, but it's in a separate thread)
     dest_dir = os.path.join("backups", str(account_id), f"{job_type.value}_{job_id}")
     os.makedirs(dest_dir, exist_ok=True)
     
     try:
-        if job_type == models.JobType.GDRIVE:
-            await services.backup_gdrive(creds, dest_dir, sel_ids)
-        elif job_type == models.JobType.GMAIL:
-            await services.backup_gmail(creds, dest_dir, sel_ids)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
+        result = ""
+        new_creds = None
+        
+        if job_type == models.JobType.GDRIVE:
+            result, new_creds = loop.run_until_complete(services.backup_gdrive(creds, dest_dir, sel_ids))
+        elif job_type == models.JobType.GMAIL:
+            result, new_creds = loop.run_until_complete(services.backup_gmail(creds, dest_dir, sel_ids))
+        
+        loop.close()
+
         # 3. Success: Refresh and update
         db = SessionLocal()
         try:
             job = db.query(models.Job).filter(models.Job.id == job_id).first()
+            account = db.query(models.Account).filter(models.Account.id == account_id).first()
+            
             if job:
                 job.status = models.JobStatus.COMPLETED
                 job.destination_path = dest_dir
-                job.completed_at = models.func.now()
-                db.commit()
+                job.completed_at = func.now()
+            
+            if account and new_creds:
+                account.credentials_json = new_creds
+                
+            db.commit()
         finally:
             db.close()
             
@@ -109,8 +124,6 @@ async def run_backup_job(job_id: int, account_id: int):
                 db.commit()
         finally:
             db.close()
-    finally:
-        db.close()
 
 @app.get("/gdrive/files/")
 def get_gdrive_files(account_id: int, parent_id: str = "root", page_token: str = None, db: Session = Depends(get_db)):
@@ -119,7 +132,10 @@ def get_gdrive_files(account_id: int, parent_id: str = "root", page_token: str =
         raise HTTPException(status_code=404, detail="Account not found")
         
     try:
-        results = services.list_gdrive_files(account.credentials_json, parent_id, page_token)
+        results, new_creds = services.list_gdrive_files(account.credentials_json, parent_id, page_token)
+        if new_creds:
+            account.credentials_json = new_creds
+            db.commit()
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -131,7 +147,10 @@ def get_gmail_messages(account_id: int, query: str = None, page_token: str = Non
         raise HTTPException(status_code=404, detail="Account not found")
         
     try:
-        results = services.list_gmail_messages(account.credentials_json, query, page_token)
+        results, new_creds = services.list_gmail_messages(account.credentials_json, query, page_token)
+        if new_creds:
+            account.credentials_json = new_creds
+            db.commit()
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -144,7 +163,7 @@ def create_job(account_id: int, job: schemas.JobCreate, background_tasks: Backgr
         
     db_job = models.Job(
         job_type=job.job_type, 
-        status=models.JobStatus.PENDING,
+        status=models.JobStatus.RUNNING,
         selected_ids=json.dumps(job.selected_ids) if job.selected_ids else None
     )
     db.add(db_job)
@@ -156,8 +175,8 @@ def create_job(account_id: int, job: schemas.JobCreate, background_tasks: Backgr
     return db_job
 
 @app.get("/jobs/", response_model=List[schemas.JobResponse])
-def list_jobs(db: Session = Depends(get_db)):
-    return db.query(models.Job).order_by(models.Job.id.desc()).all()
+def list_jobs(limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
+    return db.query(models.Job).order_by(models.Job.id.desc()).offset(offset).limit(limit).all()
 
 @app.get("/jobs/{job_id}", response_model=schemas.JobResponse)
 def get_job(job_id: int, db: Session = Depends(get_db)):

@@ -52,6 +52,17 @@ def exchange_code(code: str, redirect_uri: str) -> str:
 
 def list_gdrive_files(credentials_json: str, parent_id: str = "root", page_token: str = None):
     creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    
+    from google.auth.transport.requests import Request
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            new_creds_json = creds.to_json()
+        else:
+            raise Exception("Credentials expired and no refresh token available. Please login again.")
+    else:
+        new_creds_json = None
+
     service = build('drive', 'v3', credentials=creds)
     
     query = f"'{parent_id}' in parents and trashed=false"
@@ -61,10 +72,21 @@ def list_gdrive_files(credentials_json: str, parent_id: str = "root", page_token
         fields="nextPageToken, files(id, name, mimeType)",
         pageToken=page_token
     ).execute()
-    return results
+    
+    return results, new_creds_json
 
 async def backup_gdrive(credentials_json: str, destination_dir: str, selected_ids: list = None):
     creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    
+    from google.auth.transport.requests import Request
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            # Note: For background jobs, we might not update the DB immediately here 
+            # unless we pass the DB session, but the local creds object is now valid.
+        else:
+            raise Exception("Credentials expired. Please login again.")
+
     service = build('drive', 'v3', credentials=creds)
     
     async def download_item(item_id, item_name, item_mime, current_dir):
@@ -135,13 +157,26 @@ async def backup_gdrive(credentials_json: str, destination_dir: str, selected_id
             if not page_token:
                 break
                 
+    new_creds_json = creds.to_json() if creds.valid else None
+
     for item in items_to_process:
         await download_item(item['id'], item['name'], item['mimeType'], destination_dir)
         
-    return f"Backed up structure to {destination_dir}"
+    return f"Backed up structure to {destination_dir}", new_creds_json
 
 def list_gmail_messages(credentials_json: str, query_str: str = None, page_token: str = None):
     creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    
+    from google.auth.transport.requests import Request
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            new_creds_json = creds.to_json()
+        else:
+            raise Exception("Credentials expired. Please login again.")
+    else:
+        new_creds_json = None
+
     service = build('gmail', 'v1', credentials=creds)
     
     q = ""
@@ -183,10 +218,18 @@ def list_gmail_messages(credentials_json: str, query_str: str = None, page_token
         except Exception:
             pass
             
-    return {"messages": hydrated_messages, "nextPageToken": next_page_token}
+    return {"messages": hydrated_messages, "nextPageToken": next_page_token}, new_creds_json
 
 async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids: list = None):
     creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    
+    from google.auth.transport.requests import Request
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            raise Exception("Credentials expired. Please login again.")
+
     service = build('gmail', 'v1', credentials=creds)
     
     os.makedirs(destination_dir, exist_ok=True)
@@ -216,7 +259,9 @@ async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids
             if not page_token:
                 break
                 
+    new_creds_json = creds.to_json() if creds.valid else None
+
     for msg_id in items_to_process:
         await download_email(msg_id)
         
-    return f"Backed up {len(items_to_process)} emails structure to {destination_dir}"
+    return f"Backed up {len(items_to_process)} emails structure to {destination_dir}", new_creds_json
