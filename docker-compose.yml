@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  gwp-app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9500:9500"
+    volumes:
+      - ./backend/backups:/app/backups
+      - ./backend/gwp.db:/app/gwp.db
+      - ./.env:/app/.env
+    env_file:
+      - .env
+    restart: always

@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -24,10 +25,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.get("/")
-def read_root():
-    return {"status": "ok", "app": "GWP Backend"}
 
 @app.get("/auth/url")
 def get_auth_url(redirect_uri: str):
@@ -221,3 +218,5 @@ def get_usage(db: Session = Depends(get_db)):
     data = [{"date": d, "mb": round(b / (1024 * 1024), 2)} for d, b in usage_by_date.items()]
     data.sort(key=lambda x: x["date"])
     return data
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")

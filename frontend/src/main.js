@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:8000';
+const API_BASE = window.location.origin;
 
 const appDiv = document.getElementById('app');
 let accountId = localStorage.getItem('gwp_account_id');
@@ -106,18 +106,27 @@ function renderLoading(message) {
 
 function renderLogin() {
   appDiv.innerHTML = `
-    <div class="panel" style="text-align: center;">
-      <h1>Workspace Protection</h1>
-      <p class="subtitle">Securely backup your Google Drive and Gmail data to your local disk.</p>
-      
-      <div style="margin: 2rem 0;">
-        <input type="email" id="emailInput" placeholder="Enter your email" required />
+    <div class="login-view">
+      <div class="login-card">
+        <div class="sidebar-logo" style="justify-content: center;">
+          <div class="logo-icon">G</div>
+          <span>GWP Studio</span>
+        </div>
+        <h2 class="mb-1" style="font-size: 1.75rem;">Welcome back</h2>
+        <p class="text-muted mb-2">Connect your Google Workspace to begin protection</p>
+        
+        <div class="input-group">
+          <label>Email Address</label>
+          <input type="email" id="emailInput" placeholder="name@company.com" required />
+        </div>
+        
+        <button id="loginBtn" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 1rem;">
+          Connect with Google
+        </button>
+        <p class="text-muted" style="margin-top: 1.5rem; font-size: 0.8rem;">
+          Secure local-only backup solution.
+        </p>
       </div>
-      
-      <button id="loginBtn" class="btn">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-        Connect with Google
-      </button>
     </div>
   `;
 
@@ -129,7 +138,6 @@ function renderLogin() {
     }
     localStorage.setItem('gwp_auth_email', email);
     
-    // Redirect to backend auth URL generator
     const redirectUri = window.location.origin + window.location.pathname;
     try {
       const res = await fetch(`${API_BASE}/auth/url?redirect_uri=${encodeURIComponent(redirectUri)}`);
@@ -147,32 +155,57 @@ function renderLogin() {
 
 function renderAppShell(activeTab = 'dashboard') {
   document.body.classList.add('app-mode');
-  // Ensure toggle is visible in case it was removed
-  renderThemeToggle();
   
   appDiv.innerHTML = `
     <div class="app-container">
-      <nav class="sidebar">
-        <div class="sidebar-title" style="display: flex; align-items: center; gap: 0.4rem;">
-          <span style="background: var(--accent-orange); color: white; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.75rem;">GWP</span>
-          <span style="letter-spacing: 1px; font-size: 0.8rem;">STUDIO</span>
+      <aside class="sidebar">
+        <div class="sidebar-logo">
+          <div class="logo-icon">G</div>
+          <span>GWP Studio</span>
         </div>
-        <div class="sidebar-nav">
+        
+        <div class="sidebar-section">
+          <div class="section-label">Menu</div>
           <div class="nav-item ${activeTab === 'dashboard' ? 'active' : ''}" onclick="showTab('dashboard')">
-            📊 Dashboard
+            <i>📊</i> Dashboard
           </div>
           <div class="nav-item ${activeTab === 'backup' ? 'active' : ''}" onclick="showTab('backup')">
-            ☁️ Backup
+            <i>☁️</i> Backup
           </div>
           <div class="nav-item ${activeTab === 'usage' ? 'active' : ''}" onclick="showTab('usage')">
-            📈 Usage
-          </div>
-          <div class="nav-item logout-nav-item" onclick="logout()">
-            🚪 Log out
+            <i>📈</i> Usage
           </div>
         </div>
-      </nav>
-      <main class="main-content" id="mainContentArea"></main>
+
+        <div class="sidebar-section">
+          <div class="section-label">General</div>
+          <div class="nav-item"><i>⚙️</i> Settings</div>
+          <div class="nav-item"><i>❓</i> Help</div>
+        </div>
+
+        <div class="nav-item logout-item" onclick="logout()">
+          <i>🚪</i> Logout
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="top-bar">
+          <div class="search-container">
+            <i class="search-icon">🔍</i>
+            <input type="text" class="search-input" placeholder="Search backup jobs...">
+          </div>
+          
+          <div class="user-profile">
+            <div style="text-align: right;">
+              <div class="font-bold" style="font-size: 0.9rem;">Workspace User</div>
+              <div class="text-muted" style="font-size: 0.75rem;">${accountId || 'Not Connected'}</div>
+            </div>
+            <div class="user-avatar">WU</div>
+          </div>
+        </header>
+
+        <div id="mainContentArea"></div>
+      </main>
     </div>
   `;
   
@@ -204,24 +237,106 @@ function showTabContent(tab) {
 
 function renderDashboardView(container) {
   container.innerHTML = `
-    <div class="panel">
-      <h1>Dashboard</h1>
-      <div class="subtitle">Connected Account ID: ${accountId}</div>
-      <h3>Recent Jobs</h3>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Job ID</th>
-            <th>Type</th>
-            <th>Status</th>
-            <th>Finished At</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="dashboardTableBody">
-          <tr><td colspan="5" style="text-align:center;">Loading...</td></tr>
-        </tbody>
-      </table>
+    <div class="dashboard-header">
+      <div>
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-subtitle">Monitor and manage your workspace protection status.</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-outline" onclick="showTab('usage')">View Analytics</button>
+        <button class="btn btn-primary" onclick="showTab('backup')">+ New Backup</button>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card highlight">
+        <div class="stat-header">
+          <span class="stat-title">Total Protected</span>
+          <i>📁</i>
+        </div>
+        <div class="stat-value" id="stat-total-jobs">--</div>
+        <div class="stat-trend trend-up">
+          <i>↗</i> Increased from last week
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Gmail Backups</span>
+          <i>📧</i>
+        </div>
+        <div class="stat-value" id="stat-gmail-jobs">--</div>
+        <div class="stat-trend trend-up">
+          <i>↗</i> Inbox secured
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Drive Backups</span>
+          <i>☁️</i>
+        </div>
+        <div class="stat-value" id="stat-drive-jobs">--</div>
+        <div class="stat-trend">
+          <i>⏺</i> Docs synchronized
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Active Health</span>
+          <i>🛡️</i>
+        </div>
+        <div class="stat-value">100%</div>
+        <div class="stat-trend trend-up">
+          <i>✔</i> System operational
+        </div>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <div class="content-card">
+        <div class="card-header">
+          <h3>Recent Protection Jobs</h3>
+          <button class="btn btn-outline" style="padding: 0.5rem 1rem; font-size: 0.8rem;" onclick="fetchJobsAndPopulateTable()">Refresh</button>
+        </div>
+        <div style="overflow-x: auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Completion</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="dashboardTableBody">
+              <tr><td colspan="5" style="text-align:center;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="content-card">
+        <div class="card-header">
+          <h3>Active Progress</h3>
+        </div>
+        <div class="progress-widget">
+          <div class="font-bold">System Status</div>
+          <div class="text-muted" style="color: rgba(255,255,255,0.7); font-size: 0.8rem;">Monitoring for new updates...</div>
+          <div class="progress-circle">
+             <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: 700;">OK</div>
+             <svg viewBox="0 0 36 36" style="width: 100%; height: 100%;">
+                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="3" />
+                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="white" stroke-width="3" stroke-dasharray="100, 100" />
+             </svg>
+          </div>
+          <div style="text-align: center; font-size: 0.8rem;">All systems protected</div>
+        </div>
+        
+        <div class="content-card" style="margin-top: 1.5rem; padding: 1.25rem; background: var(--accent-secondary-light); border-color: var(--accent-secondary);">
+           <div class="font-bold" style="color: var(--accent-primary); font-size: 0.9rem;">Pro Tip</div>
+           <p style="font-size: 0.8rem; color: var(--accent-primary); margin: 0.5rem 0 0;">Regularly expire old backups to free up local storage space.</p>
+        </div>
+      </div>
     </div>
   `;
   
@@ -238,19 +353,35 @@ async function fetchJobsAndPopulateTable() {
       const tbody = document.getElementById('dashboardTableBody');
       if (!tbody) return; 
       
+      // Update stats
+      const totalEl = document.getElementById('stat-total-jobs');
+      if (totalEl) totalEl.innerText = jobsData.length;
+      
+      const gmailEl = document.getElementById('stat-gmail-jobs');
+      if (gmailEl) gmailEl.innerText = jobsData.filter(j => j.job_type === 'GMAIL').length;
+      
+      const driveEl = document.getElementById('stat-drive-jobs');
+      if (driveEl) driveEl.innerText = jobsData.filter(j => j.job_type === 'GDRIVE').length;
+      
       if (jobsData.length === 0) {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 2rem; color: var(--text-secondary);">No jobs found. Navigate to Backup to start one.</td></tr>`;
         return;
       }
       
       tbody.innerHTML = jobsData.map(job => {
-        const timeFinished = job.completed_at ? new Date(job.completed_at).toLocaleString() : '-';
+        const timeFinished = job.completed_at ? new Date(job.completed_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '-';
+        const typeIcon = job.job_type === 'GMAIL' ? '📧' : '☁️';
         return `
           <tr>
-            <td>#${job.id}</td>
-            <td>${job.job_type}</td>
-            <td><span class="status-badge status-${job.status.toLowerCase()}">${job.status}</span></td>
-            <td>${timeFinished}</td>
+            <td><div class="font-bold">#${job.id}</div></td>
+            <td>
+               <div style="display: flex; align-items: center; gap: 0.5rem;">
+                 <div class="service-icon">${typeIcon}</div>
+                 <span>${job.job_type}</span>
+               </div>
+            </td>
+            <td><span class="status-pill ${job.status.toLowerCase()}">${job.status}</span></td>
+            <td><span class="text-muted">${timeFinished}</span></td>
             <td>
               <div class="action-menu" onclick="event.stopPropagation(); toggleDropdown(${job.id})">
                 <button class="action-btn">⋮</button>
@@ -292,21 +423,43 @@ function renderBackupView(container) {
   if (jobsPollingInterval) clearInterval(jobsPollingInterval);
   
   container.innerHTML = `
-    <div class="panel">
-      <h1>New Backup</h1>
-      <div class="subtitle">Select a service to start an interactive backup session</div>
-      <div class="dashboard-grid" style="margin-top: 0;">
-        <div class="panel" style="background: var(--panel-sub-bg); border-radius: 8px;">
-          <h3 style="font-size: 1rem;">Google Drive</h3>
-          <p style="color:var(--text-secondary); margin-bottom: 1.5rem;">Backup selective Google Docs, Sheets, and hierarchical folders natively.</p>
-          <button class="btn" id="backupDriveBtn">Browse GDrive & Backup</button>
-        </div>
-        <div class="panel" style="background: var(--panel-sub-bg); border-radius: 8px;">
-          <h3 style="font-size: 1rem;">Gmail</h3>
-          <p style="color:var(--text-secondary); margin-bottom: 1.5rem;">Backup raw .eml emails preserving native attachments spanning your inbox.</p>
-          <button class="btn" id="backupGmailBtn">Browse Gmail & Backup</button>
-        </div>
+    <div class="dashboard-header">
+      <div>
+        <h1 class="page-title">Initiate Protection</h1>
+        <p class="page-subtitle">Choose a service to begin a secure local synchronization.</p>
       </div>
+    </div>
+
+    <div class="service-grid">
+      <div class="service-card">
+        <i>☁️</i>
+        <h3>Google Drive</h3>
+        <p class="text-muted mb-2" style="font-size: 0.9rem;">Selectively backup Documents, Sheets, and full directory structures.</p>
+        <button class="btn btn-primary" id="backupDriveBtn" style="width: 100%; justify-content: center;">Browse & Backup</button>
+      </div>
+      
+      <div class="service-card">
+        <i>📧</i>
+        <h3>Gmail Protection</h3>
+        <p class="text-muted mb-2" style="font-size: 0.9rem;">Preserve your communication history by backing up emails to .eml format.</p>
+        <button class="btn btn-primary" id="backupGmailBtn" style="width: 100%; justify-content: center;">Browse & Backup</button>
+      </div>
+    </div>
+
+    <div class="content-card" style="margin-top: 2rem;">
+       <div class="card-header">
+         <h3>System Prerequisites</h3>
+       </div>
+       <div style="display: flex; gap: 2rem;">
+          <div style="flex: 1; padding: 1.5rem; background: #f8fafc; border-radius: var(--border-radius-md);">
+             <div class="font-bold mb-1">Local Storage</div>
+             <div class="text-muted" style="font-size: 0.85rem;">Ensure you have at least 10GB of free space on your host machine for large Drive archives.</div>
+          </div>
+          <div style="flex: 1; padding: 1.5rem; background: #f8fafc; border-radius: var(--border-radius-md);">
+             <div class="font-bold mb-1">OAuth Tokens</div>
+             <div class="text-muted" style="font-size: 0.85rem;">Your session tokens are stored securely and only used for read-only access to your data.</div>
+          </div>
+       </div>
     </div>
   `;
   
@@ -318,11 +471,20 @@ function renderUsageView(container) {
   if (jobsPollingInterval) clearInterval(jobsPollingInterval);
   
   container.innerHTML = `
-    <div class="panel">
-      <h1>Storage Usage</h1>
-      <div class="subtitle">Track your historical backup footprint over time</div>
-      <div style="background: var(--panel-sub-bg); border-radius: 8px; padding: 1rem; border: 1px solid var(--border-color);">
-        <canvas id="usageChart" height="100"></canvas>
+    <div class="dashboard-header">
+      <div>
+        <h1 class="page-title">Storage Analytics</h1>
+        <p class="page-subtitle">Monitor the growth of your local data fortress.</p>
+      </div>
+    </div>
+
+    <div class="content-card">
+      <div class="card-header">
+        <h3>Protection History (MB)</h3>
+        <div class="text-muted" style="font-size: 0.8rem;">Data synchronized to local volume</div>
+      </div>
+      <div style="height: 400px; position: relative;">
+        <canvas id="usageChart"></canvas>
       </div>
     </div>
   `;
@@ -351,13 +513,14 @@ async function loadUsageGraph() {
           datasets: [{
             label: 'Local Storage Used (MB)',
             data: values,
-            borderColor: accentBlue,
-            backgroundColor: accentBlue + '1a', // 10% opacity
+            borderColor: '#14532d',
+            backgroundColor: 'rgba(20, 83, 45, 0.05)',
             fill: true,
             tension: 0.4,
-            pointRadius: 5,
-            pointBackgroundColor: accentOrange,
-            pointBorderColor: '#ffffff'
+            pointRadius: 6,
+            pointBackgroundColor: '#22c55e',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2
           }]
         },
         options: {
@@ -390,16 +553,16 @@ function openDriveBrowser() {
     modal.innerHTML = `
       <div class="modal-content">
         <div class="modal-header">
-          <h2 style="margin: 0; font-size: 1.5rem;">Select Files to Backup</h2>
-          <button class="btn btn-secondary" onclick="document.getElementById('driveBrowserModal').classList.remove('active')">Close</button>
+          <h2 style="margin: 0; font-size: 1.5rem; font-family: 'Outfit';">Browse Google Drive</h2>
+          <button class="btn btn-outline" style="padding: 0.5rem 1rem;" onclick="document.getElementById('driveBrowserModal').classList.remove('active')">✕</button>
         </div>
         <div class="modal-body">
-          <div class="breadcrumb" id="driveBreadcrumbs"></div>
+          <div class="breadcrumb" id="driveBreadcrumbs" style="margin-bottom: 1.5rem; background: #f1f5f9; padding: 0.75rem 1rem; border-radius: 12px; font-weight: 600;"></div>
           <div id="driveFilesList">Loading files...</div>
         </div>
         <div class="modal-footer">
-          <span style="color: var(--text-secondary); font-size: 0.9rem;" id="selectionCount">0 items selected</span>
-          <button class="btn" id="confirmDriveBackupBtn">Backup Selected Now</button>
+          <span style="color: var(--text-secondary); font-weight: 600;" id="selectionCount">0 items selected</span>
+          <button class="btn btn-primary" id="confirmDriveBackupBtn">Start Sync Now</button>
         </div>
       </div>
     `;
@@ -432,19 +595,19 @@ function openGmailBrowser() {
     modal.innerHTML = `
       <div class="modal-content">
         <div class="modal-header">
-          <h2 style="margin: 0; font-size: 1.5rem;">Select Emails to Backup</h2>
-          <button class="btn btn-secondary" onclick="document.getElementById('gmailBrowserModal').classList.remove('active')">Close</button>
+          <h2 style="margin: 0; font-size: 1.5rem; font-family: 'Outfit';">Search Gmail</h2>
+          <button class="btn btn-outline" style="padding: 0.5rem 1rem;" onclick="document.getElementById('gmailBrowserModal').classList.remove('active')">✕</button>
         </div>
-        <div style="padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; gap: 1rem;">
-          <input type="text" id="gmailFilterInput" placeholder="Filter by label (e.g. INBOX, important)" style="flex: 1; margin: 0; background: var(--bg-color); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 0.5rem;" />
-          <button class="btn btn-secondary" id="applyGmailFilterBtn">Search</button>
+        <div style="padding: 1.5rem; border-bottom: 1px solid var(--border-color); display: flex; gap: 1rem; background: #f8fafc;">
+          <input type="text" id="gmailFilterInput" placeholder="Filter by label (e.g. INBOX, important)" style="flex: 1; margin: 0; background: white; border: 1.5px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; font-family: inherit;" />
+          <button class="btn btn-primary" id="applyGmailFilterBtn">Search</button>
         </div>
         <div class="modal-body" style="padding: 0;">
           <div id="gmailMessagesList" style="padding: 1rem;">Loading emails...</div>
         </div>
         <div class="modal-footer">
-          <span style="color: var(--text-secondary); font-size: 0.9rem;" id="gmailSelectionCount">0 emails selected</span>
-          <button class="btn" id="confirmGmailBackupBtn">Backup Selected Now</button>
+          <span style="color: var(--text-secondary); font-weight: 600;" id="gmailSelectionCount">0 emails selected</span>
+          <button class="btn btn-primary" id="confirmGmailBackupBtn">Start Sync Now</button>
         </div>
       </div>
     `;
@@ -510,26 +673,22 @@ async function loadGmailMessages(queryStr = "", loadMore = false) {
       const isSelected = selectedGmailIds.has(msg.id);
       
       const div = document.createElement('div');
-      div.className = `file-item ${isSelected ? 'selected' : ''}`;
+      div.className = `file-row ${isSelected ? 'selected' : ''}`;
       div.innerHTML = `
-        <input type="checkbox" style="margin-right: 1rem; transform: scale(1.2);" ${isSelected ? 'checked' : ''}>
+        <div style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 2px solid var(--border-color); border-radius: 6px; background: white;">
+          ${isSelected ? '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>' : ''}
+        </div>
         <div style="flex:1; overflow:hidden; min-width: 0;">
           <div style="font-weight: 600; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; margin-bottom: 0.2rem;">${msg.subject}</div>
-          <div style="font-size: 0.8rem; color: var(--text-secondary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">From: ${msg.from}</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">From: ${msg.from}</div>
         </div>
-        <div style="font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; margin-left: 1rem;">
-          ${msg.date ? new Date(msg.date).toLocaleDateString() : ''}
+        <div style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; margin-left: 1rem; font-weight: 600;">
+          ${msg.date ? new Date(msg.date).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''}
         </div>
       `;
       
-      const checkbox = div.querySelector('input');
-      checkbox.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleGmailSelection(msg.id, div, checkbox);
-      });
-
       div.addEventListener('click', () => {
-        toggleGmailSelection(msg.id, div, checkbox);
+        toggleGmailSelection(msg.id, div);
       });
       
       listContainer.appendChild(div);
@@ -550,15 +709,17 @@ async function loadGmailMessages(queryStr = "", loadMore = false) {
   }
 }
 
-function toggleGmailSelection(fileId, itemDiv, checkboxEl) {
+function toggleGmailSelection(fileId, itemDiv) {
   if (selectedGmailIds.has(fileId)) {
     selectedGmailIds.delete(fileId);
     itemDiv.classList.remove('selected');
-    checkboxEl.checked = false;
+    const check = itemDiv.querySelector('span');
+    if (check) check.remove();
   } else {
     selectedGmailIds.add(fileId);
     itemDiv.classList.add('selected');
-    checkboxEl.checked = true;
+    const checkContainer = itemDiv.querySelector('div');
+    checkContainer.innerHTML = '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>';
   }
   updateGmailSelectionCount();
 }
@@ -611,25 +772,21 @@ async function loadDriveFolder(folderId, loadMore = false) {
       const isSelected = selectedDriveFiles.has(file.id);
       
       const div = document.createElement('div');
-      div.className = `file-item ${isSelected ? 'selected' : ''}`;
+      div.className = `file-row ${isSelected ? 'selected' : ''}`;
       div.innerHTML = `
-        <input type="checkbox" style="margin-right: 1rem; transform: scale(1.2);" ${isSelected ? 'checked' : ''}>
-        <div class="file-icon">${icon}</div>
-        <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${file.name}</div>
+        <div style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 2px solid var(--border-color); border-radius: 6px; background: white;">
+          ${isSelected ? '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>' : ''}
+        </div>
+        <div class="service-icon" style="width: 32px; height: 32px; font-size: 1rem; border-radius: 8px;">${icon}</div>
+        <div class="file-name">${file.name}</div>
       `;
       
-      const checkbox = div.querySelector('input');
-      checkbox.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleSelection(file.id, div, checkbox);
-      });
-
       div.addEventListener('click', () => {
         if (isFolder) {
           currentDrivePath.push({ id: file.id, name: file.name });
           loadDriveFolder(file.id);
         } else {
-          toggleSelection(file.id, div, checkbox);
+          toggleSelection(file.id, div);
         }
       });
       
@@ -651,15 +808,17 @@ async function loadDriveFolder(folderId, loadMore = false) {
   }
 }
 
-function toggleSelection(fileId, itemDiv, checkboxEl) {
+function toggleSelection(fileId, itemDiv) {
   if (selectedDriveFiles.has(fileId)) {
     selectedDriveFiles.delete(fileId);
     itemDiv.classList.remove('selected');
-    checkboxEl.checked = false;
+    const check = itemDiv.querySelector('span');
+    if (check) check.remove();
   } else {
     selectedDriveFiles.add(fileId);
     itemDiv.classList.add('selected');
-    checkboxEl.checked = true;
+    const checkContainer = itemDiv.querySelector('div');
+    checkContainer.innerHTML = '<span style="color: var(--accent-primary); font-weight: 900;">✓</span>';
   }
   updateSelectionCount();
 }

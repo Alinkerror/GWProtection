@@ -67,13 +67,29 @@ GWP/
     │   └── style.css          # Premium Dark Mode Glassmorphism UI tokens
 ```
 
-## Local Development Setup
+## Running the Application
 
-### Backend
-1. Place your Google Application web credentials into `backend/.env`.
-2. Ensure you have installed your virtual environment packages (`pip install -r requirements.txt`).
-3. Run `uvicorn main:app --reload` from within the `/backend` folder.
+### 🐳 Docker Setup (Recommended)
+The easiest way to run the application is using Docker Compose. This runs both the frontend and backend in a single container on port **9500**.
 
-### Frontend
+1.  **Credentials**: Place your Google Application web credentials into `backend/.env`.
+2.  **Launch**: From the root directory, run:
+    ```bash
+    docker-compose up --build
+    ```
+3.  **Access**: Open [http://localhost:9500](http://localhost:9500) in your browser.
+
+---
+
+### Local Development Setup (Manual)
+
+If you prefer to run the components separately for development:
+
+#### Backend
+1. Ensure you have installed your virtual environment packages (`pip install -r requirements.txt`).
+2. Run `uvicorn main:app --reload --port 9500` from within the `/backend` folder.
+
+#### Frontend
 1. Run `npm install` from within `/frontend`.
-2. Run `npm run dev` to start the live web server on `http://localhost:5173`.
+2. Run `npm run dev` to start the live web server.
+   > **Note**: Since the application is now configured for a unified origin, you may need to update the `API_BASE` in `src/main.js` if running the frontend on a different port than the backend.
