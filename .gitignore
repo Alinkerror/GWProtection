@@ -1,2 +1,4 @@
 backend/backups
 backend/gwp_app.db
+.env
+backend/.env
