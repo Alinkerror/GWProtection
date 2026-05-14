@@ -4,12 +4,16 @@ import base64
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload, MediaIoBaseUpload
 import aiofiles
+import io
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/drive.readonly'
+    'https://www.googleapis.com/auth/drive.readonly',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'openid'
 ]
 
 def get_client_config(redirect_uri: str = "http://localhost:5173"):
@@ -34,7 +38,8 @@ def get_auth_url(redirect_uri: str):
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
-    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
+    # Changed prompt to 'select_account' to avoid re-consenting every time
+    auth_url, _ = flow.authorization_url(prompt='select_account', access_type='offline')
     _auth_flows['latest'] = flow
     return auth_url
 
@@ -50,8 +55,25 @@ def exchange_code(code: str, redirect_uri: str) -> str:
     credentials = flow.credentials
     return credentials.to_json()
 
+def build_creds(credentials_json: str):
+    data = json.loads(credentials_json)
+    return Credentials(
+        token=data.get('token'),
+        refresh_token=data.get('refresh_token'),
+        token_uri=data.get('token_uri'),
+        client_id=data.get('client_id'),
+        client_secret=data.get('client_secret'),
+        scopes=SCOPES
+    )
+
+def get_user_info(credentials_json: str):
+    creds = build_creds(credentials_json)
+    service = build('oauth2', 'v2', credentials=creds)
+    user_info = service.userinfo().get().execute()
+    return user_info
+
 def list_gdrive_files(credentials_json: str, parent_id: str = "root", page_token: str = None):
-    creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    creds = build_creds(credentials_json)
     
     from google.auth.transport.requests import Request
     if not creds.valid:
@@ -76,7 +98,7 @@ def list_gdrive_files(credentials_json: str, parent_id: str = "root", page_token
     return results, new_creds_json
 
 async def backup_gdrive(credentials_json: str, destination_dir: str, selected_ids: list = None):
-    creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    creds = build_creds(credentials_json)
     
     from google.auth.transport.requests import Request
     if not creds.valid:
@@ -165,7 +187,7 @@ async def backup_gdrive(credentials_json: str, destination_dir: str, selected_id
     return f"Backed up structure to {destination_dir}", new_creds_json
 
 def list_gmail_messages(credentials_json: str, query_str: str = None, page_token: str = None):
-    creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    creds = build_creds(credentials_json)
     
     from google.auth.transport.requests import Request
     if not creds.valid:
@@ -221,7 +243,7 @@ def list_gmail_messages(credentials_json: str, query_str: str = None, page_token
     return {"messages": hydrated_messages, "nextPageToken": next_page_token}, new_creds_json
 
 async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids: list = None):
-    creds = Credentials.from_authorized_user_info(json.loads(credentials_json), SCOPES)
+    creds = build_creds(credentials_json)
     
     from google.auth.transport.requests import Request
     if not creds.valid:
@@ -265,3 +287,55 @@ async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids
         await download_email(msg_id)
         
     return f"Backed up {len(items_to_process)} emails structure to {destination_dir}", new_creds_json
+
+async def restore_gdrive(credentials_json: str, source_dir: str):
+    creds = build_creds(credentials_json)
+    from google.auth.transport.requests import Request
+    if not creds.valid and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    
+    service = build('drive', 'v3', credentials=creds)
+    
+    # Create root restore folder
+    folder_name = f"[Restored] {os.path.basename(source_dir)}"
+    file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+    root_folder = service.files().create(body=file_metadata, fields='id').execute()
+    root_id = root_folder.get('id')
+
+    async def upload_recursive(local_path, drive_parent_id):
+        for item in os.listdir(local_path):
+            full_path = os.path.join(local_path, item)
+            if os.path.isdir(full_path):
+                # Create folder on drive
+                meta = {'name': item, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [drive_parent_id]}
+                folder = service.files().create(body=meta, fields='id').execute()
+                await upload_recursive(full_path, folder.get('id'))
+            else:
+                # Upload file
+                meta = {'name': item, 'parents': [drive_parent_id]}
+                media = MediaFileUpload(full_path, resumable=True)
+                service.files().create(body=meta, media_body=media, fields='id').execute()
+
+    await upload_recursive(source_dir, root_id)
+    return f"Restored all files to Google Drive folder: {folder_name}", creds.to_json()
+
+async def restore_gmail(credentials_json: str, source_dir: str):
+    creds = build_creds(credentials_json)
+    from google.auth.transport.requests import Request
+    if not creds.valid and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        
+    service = build('gmail', 'v1', credentials=creds)
+    
+    count = 0
+    for filename in os.listdir(source_dir):
+        if filename.endswith(".eml"):
+            file_path = os.path.join(source_dir, filename)
+            with open(file_path, 'rb') as f:
+                raw_content = f.read()
+                # Gmail insert API expects a media body for raw RFC822 content
+                media = MediaIoBaseUpload(io.BytesIO(raw_content), mimetype='message/rfc822')
+                service.users().messages().insert(userId='me', body={'labelIds': ['INBOX']}, media_body=media).execute()
+                count += 1
+                
+    return f"Restored {count} emails to your Inbox.", creds.to_json()

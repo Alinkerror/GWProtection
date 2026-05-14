@@ -1,6 +1,8 @@
 const API_BASE = window.location.origin;
 
 const appDiv = document.getElementById('app');
+let currentUser = null;
+let currentTab = 'dashboard';
 let accountId = localStorage.getItem('gwp_account_id');
 let jobsPollingInterval = null;
 let selectedDriveFiles = new Set();
@@ -15,7 +17,6 @@ let usageChartInstance = null;
 async function init() {
   // Initialize theme first
   applyTheme();
-  renderThemeToggle();
 
   const urlParams = new URLSearchParams(window.location.search);
   const code = urlParams.get('code');
@@ -28,6 +29,11 @@ async function init() {
     alert('Authentication failed: ' + error);
     renderLogin();
   } else if (accountId) {
+    try {
+      const accsRes = await fetch(`${API_BASE}/accounts/`);
+      const accs = await accsRes.json();
+      currentUser = accs.find(a => a.id == accountId);
+    } catch (e) {}
     renderAppShell();
   } else {
     // Show login page
@@ -47,28 +53,6 @@ function applyTheme(theme) {
   }
 }
 
-window.toggleTheme = function(e) {
-  const newTheme = e.target.checked ? 'light' : 'dark';
-  applyTheme(newTheme);
-}
-
-function renderThemeToggle() {
-  if (document.querySelector('.theme-switch-wrapper')) return;
-  
-  const wrapper = document.createElement('div');
-  wrapper.className = 'theme-switch-wrapper';
-  wrapper.innerHTML = `
-    <span class="theme-label">🌙</span>
-    <label class="theme-switch" for="theme-checkbox">
-      <input type="checkbox" id="theme-checkbox" onchange="toggleTheme(event)" />
-      <div class="slider round"></div>
-    </label>
-    <span class="theme-label" style="margin-left:10px;">☀️</span>
-  `;
-  document.body.appendChild(wrapper);
-  // Ensure toggle matches current theme
-  applyTheme();
-}
 
 async function handleAuthExchange(code) {
   renderLoading('Authenticating with Google...');
@@ -157,54 +141,85 @@ function renderLogin() {
 function renderAppShell(activeTab = 'dashboard') {
   document.body.classList.add('app-mode');
   
+  const userInitials = (currentUser?.name || 'U').charAt(0);
+  const userAvatar = currentUser?.picture 
+    ? `<img src="${currentUser.picture}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;" />`
+    : `<div class="user-avatar" style="width:32px; height:32px; font-size:12px;">${userInitials}</div>`;
+
   appDiv.innerHTML = `
     <div class="app-container">
       <aside class="sidebar">
-        <div class="sidebar-logo">
-          <div class="logo-icon">G</div>
-          <span>GWP Studio</span>
-        </div>
-        
-        <div class="sidebar-section">
-          <div class="section-label">Menu</div>
-          <div class="nav-item ${activeTab === 'dashboard' ? 'active' : ''}" onclick="showTab('dashboard')">
-            <i>📊</i> Dashboard
+        <!-- Narrow Rail -->
+        <div class="sidebar-narrow">
+          <div class="logo-icon" style="background:var(--accent-primary-light); color:var(--accent-primary);">G</div>
+          <div class="nav-icon-strip" style="display:flex; flex-direction:column; gap:1.5rem; align-items:center; margin-top:2rem;">
+            <i class="ri-dashboard-line" style="font-size:1.4rem; color:var(--accent-primary);"></i>
+            <i class="ri-shield-check-line" style="font-size:1.4rem; color:var(--text-muted);"></i>
+            <i class="ri-history-line" style="font-size:1.4rem; color:var(--text-muted);"></i>
+            <i class="ri-settings-4-line" style="font-size:1.4rem; color:var(--text-muted); margin-top: auto;"></i>
           </div>
-          <div class="nav-item ${activeTab === 'backup' ? 'active' : ''}" onclick="showTab('backup')">
-            <i>☁️</i> Backup
-          </div>
-          <div class="nav-item ${activeTab === 'activity' ? 'active' : ''}" onclick="showTab('activity')">
-            <i>🕒</i> Activity
-          </div>
-          <div class="nav-item ${activeTab === 'usage' ? 'active' : ''}" onclick="showTab('usage')">
-            <i>📈</i> Usage
+          <div style="margin-top:auto;">
+             ${userAvatar}
           </div>
         </div>
 
-        <div class="sidebar-section">
-          <div class="section-label">General</div>
-          <div class="nav-item"><i>⚙️</i> Settings</div>
-          <div class="nav-item"><i>❓</i> Help</div>
-        </div>
+        <!-- Expanded Menu -->
+        <div class="sidebar-main">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:3rem;">
+            <h2 style="font-family:'Outfit'; font-size:1.5rem; color:var(--accent-primary-dark);">GWP Studio</h2>
+            <i class="ri-arrow-left-s-line" style="color:var(--text-muted); cursor:pointer;"></i>
+          </div>
 
-        <div class="nav-item logout-item" onclick="logout()">
-          <i>🚪</i> Logout
+          <div class="sidebar-section">
+            <div class="section-label">Synchronize</div>
+            <a class="nav-item ${activeTab === 'dashboard' ? 'active' : ''}" onclick="showTab('dashboard')">
+              <i class="ri-dashboard-line"></i> Dashboard
+            </a>
+            <a class="nav-item ${activeTab === 'backup' ? 'active' : ''}" onclick="showTab('backup')">
+              <i class="ri-shield-check-line"></i> Backup Center
+            </a>
+            <a class="nav-item ${activeTab === 'restore' ? 'active' : ''}" onclick="showTab('restore')">
+              <i class="ri-history-line"></i> Recovery Hub
+            </a>
+            <a class="nav-item ${activeTab === 'activity' ? 'active' : ''}" onclick="showTab('activity')">
+              <i class="ri-list-check"></i> Activity Log
+            </a>
+          </div>
+
+          <div class="sidebar-section" style="margin-top:2rem;">
+            <div class="section-label">General</div>
+            <a class="nav-item"><i class="ri-settings-3-line"></i> Settings</a>
+            <a class="nav-item"><i class="ri-question-line"></i> Help Center</a>
+          </div>
+
+          <div class="sidebar-footer">
+            <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
+               ${userAvatar}
+               <div style="overflow:hidden;">
+                 <div class="font-bold" style="font-size:0.85rem; white-space:nowrap; text-overflow:ellipsis;">${currentUser?.name || 'User'}</div>
+                 <div class="text-muted" style="font-size:0.7rem; white-space:nowrap; text-overflow:ellipsis;">Admin Manager</div>
+               </div>
+            </div>
+            <a class="nav-item" onclick="logout()" style="color:var(--text-secondary);">
+              <i class="ri-logout-box-r-line"></i> Log out
+            </a>
+          </div>
         </div>
       </aside>
 
       <main class="main-content">
         <header class="top-bar">
-          <div class="search-container">
-            <i class="search-icon">🔍</i>
-            <input type="text" class="search-input" placeholder="Search backup jobs...">
+          <div class="search-container" style="width:300px;">
+            <i class="ri-search-line search-icon"></i>
+            <input type="text" class="search-input" placeholder="Search data...">
           </div>
           
-          <div class="user-profile">
-            <div style="text-align: right;">
-              <div class="font-bold" style="font-size: 0.9rem;">Workspace User</div>
-              <div class="text-muted" style="font-size: 0.75rem;">${accountId || 'Not Connected'}</div>
-            </div>
-            <div class="user-avatar">WU</div>
+          <div style="display:flex; align-items:center; gap:1.5rem;">
+             <div style="background:white; padding:0.5rem 1rem; border-radius:100px; border:1px solid var(--border-color); font-size:0.85rem; display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+               <i class="ri-calendar-line"></i>
+               <span>Time period: <b>Last 30 days</b></span>
+             </div>
+             <i class="ri-notification-3-line" style="font-size:1.25rem; color:var(--text-muted); cursor:pointer;"></i>
           </div>
         </header>
 
@@ -240,6 +255,8 @@ function showTabContent(tab) {
     renderDashboardView(container);
   } else if (tab === 'backup') {
     renderBackupView(container);
+  } else if (tab === 'restore') {
+    renderRestoreView(container);
   } else if (tab === 'activity') {
     renderActivityView(container);
   } else if (tab === 'usage') {
@@ -254,56 +271,59 @@ function renderDashboardView(container) {
         <h1 class="page-title">Dashboard</h1>
         <p class="page-subtitle">Monitor and manage your workspace protection status.</p>
       </div>
-      <div class="header-actions">
-        <button class="btn btn-outline" onclick="showTab('usage')">View Analytics</button>
-        <button class="btn btn-primary" onclick="showTab('backup')">+ New Backup</button>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metrics-card primary">
+        <div class="metrics-label">
+          <span>Total Protected</span>
+          <i class="ri-folder-shield-2-line"></i>
+        </div>
+        <div class="metrics-value" id="stat-total-jobs">--</div>
+        <div class="metrics-trend">
+          <i class="ri-arrow-right-up-line"></i> 
+          <span>Increased from last week</span>
+        </div>
+      </div>
+
+      <div class="metrics-card">
+        <div class="metrics-label">
+          <span>Gmail Backups</span>
+          <i class="ri-mail-check-line"></i>
+        </div>
+        <div class="metrics-value" id="stat-gmail-jobs">--</div>
+        <div class="metrics-trend trend-up">
+          <i class="ri-checkbox-circle-line"></i> 
+          <span>Inbox secured</span>
+        </div>
+      </div>
+
+      <div class="metrics-card">
+        <div class="metrics-label">
+          <span>Drive Backups</span>
+          <i class="ri-cloud-line"></i>
+        </div>
+        <div class="metrics-value" id="stat-drive-jobs">--</div>
+        <div class="metrics-trend trend-up">
+          <i class="ri-refresh-line"></i> 
+          <span>Docs synchronized</span>
+        </div>
+      </div>
+
+      <div class="metrics-card">
+        <div class="metrics-label">
+          <span>Active Health</span>
+          <i class="ri-shield-user-line"></i>
+        </div>
+        <div class="metrics-value">100%</div>
+        <div class="metrics-trend trend-up">
+          <i class="ri-check-double-line"></i> 
+          <span>System operational</span>
+        </div>
       </div>
     </div>
 
-    <div class="stats-grid">
-      <div class="stat-card highlight">
-        <div class="stat-header">
-          <span class="stat-title">Total Protected</span>
-          <i>📁</i>
-        </div>
-        <div class="stat-value" id="stat-total-jobs">--</div>
-        <div class="stat-trend trend-up">
-          <i>↗</i> Increased from last week
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-title">Gmail Backups</span>
-          <i>📧</i>
-        </div>
-        <div class="stat-value" id="stat-gmail-jobs">--</div>
-        <div class="stat-trend trend-up">
-          <i>↗</i> Inbox secured
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-title">Drive Backups</span>
-          <i>☁️</i>
-        </div>
-        <div class="stat-value" id="stat-drive-jobs">--</div>
-        <div class="stat-trend">
-          <i>⏺</i> Docs synchronized
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-title">Active Health</span>
-          <i>🛡️</i>
-        </div>
-        <div class="stat-value">100%</div>
-        <div class="stat-trend trend-up">
-          <i>✔</i> System operational
-        </div>
-      </div>
-    </div>
-
-    <div class="main-grid">
+    <div class="main-dashboard-content">
       <div class="content-card">
         <div class="card-header">
           <h3>Recent Protection Jobs</h3>
@@ -399,7 +419,14 @@ async function fetchJobsAndPopulateTable() {
               <div class="action-menu" onclick="event.stopPropagation(); toggleDropdown(${job.id})">
                 <button class="action-btn">⋮</button>
                 <div class="dropdown-content" id="dropdown-${job.id}">
-                  <button class="dropdown-item" onclick="expireBackup(${job.id})">Expire Backup</button>
+                   ${job.status === 'COMPLETED' ? `
+                     <button class="dropdown-item" onclick="startRestore(${job.id}, '${job.job_type}')">
+                        <i class="ri-restart-line"></i> Restore Data
+                     </button>
+                     <button class="dropdown-item text-danger" onclick="expireBackup(${job.id})">
+                       <i class="ri-delete-bin-line"></i> Expire Backup
+                     </button>
+                   ` : '<span class="dropdown-item disabled">No actions</span>'}
                 </div>
               </div>
             </td>
@@ -423,12 +450,14 @@ document.addEventListener('click', () => {
 });
 
 window.expireBackup = async function(jobId) {
-  if(!confirm("Are you sure you want to expire and delete this backup entirely from local storage?")) return;
+  if(!confirm("Are you sure you want to expire and delete this backup archive? This action will remove the local data files permanently.")) return;
   try {
-    const res = await fetch(`${API_BASE}/jobs/${jobId}`, { method: 'DELETE' });
-    if(res.ok) fetchJobsAndPopulateTable();
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/expire`, { method: 'POST' });
+    if(res.ok) {
+      showTab('activity');
+    }
   } catch (e) {
-    alert("Error deleting job.");
+    alert("Error expiring backup.");
   }
 }
 
@@ -459,6 +488,34 @@ function renderBackupView(container) {
       </div>
     </div>
 
+    <div class="dashboard-header" style="margin-top: 3rem; display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <h1 class="page-title">Automated Policies</h1>
+        <p class="page-subtitle">Set up recurring schedules to automatically protect your data.</p>
+      </div>
+      <button class="btn btn-primary" onclick="openPolicyModal()">+ Create Policy</button>
+    </div>
+
+    <div class="content-card">
+      <div style="overflow-x: auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Policy Name</th>
+              <th>Service</th>
+              <th>Frequency</th>
+              <th>Start Time</th>
+              <th>Last Run</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="policyTableBody">
+            <tr><td colspan="6" style="text-align:center; padding: 2rem; color: var(--text-muted);">Loading policies...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="content-card" style="margin-top: 2rem;">
        <div class="card-header">
          <h3>System Prerequisites</h3>
@@ -478,6 +535,7 @@ function renderBackupView(container) {
   
   document.getElementById('backupDriveBtn').addEventListener('click', openDriveBrowser);
   document.getElementById('backupGmailBtn').addEventListener('click', openGmailBrowser);
+  fetchPolicies();
 }
 
 function renderActivityView(container) {
@@ -528,6 +586,108 @@ function renderActivityView(container) {
   fetchActivityJobs(false);
   if (jobsPollingInterval) clearInterval(jobsPollingInterval);
   jobsPollingInterval = setInterval(() => fetchActivityJobs(true), 3000);
+}
+
+function renderRestoreView(container) {
+  container.innerHTML = `
+    <div class="dashboard-header">
+      <div>
+        <h1 class="page-title">Recovery Center</h1>
+        <p class="page-subtitle">Restore your archived data back to Google services.</p>
+      </div>
+    </div>
+
+    <div class="content-card">
+      <div class="card-header">
+        <h3>Available Backups</h3>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Backup ID</th>
+            <th>Source Service</th>
+            <th>Archive Date</th>
+            <th>Status</th>
+            <th>Recovery</th>
+          </tr>
+        </thead>
+        <tbody id="restoreTableBody">
+          <tr><td colspan="5" style="text-align:center; padding: 3rem; color: var(--text-muted);">Scanning for completed backups...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+  
+  fetchRestoreJobs();
+}
+
+async function fetchRestoreJobs() {
+  const tbody = document.getElementById('restoreTableBody');
+  if (!tbody) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/jobs/?limit=50`);
+    if (res.ok) {
+      const allJobs = await res.json();
+      const completedBackups = allJobs.filter(j => 
+        j.status === 'COMPLETED' && (j.job_type === 'GDRIVE' || j.job_type === 'GMAIL')
+      );
+
+      if (completedBackups.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 3rem; color: var(--text-muted);">No completed backups found. Run a backup first to enable recovery.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = completedBackups.map(job => {
+        const date = new Date(job.completed_at || job.created_at).toLocaleString();
+        const icon = job.job_type === 'GMAIL' ? '📧' : '☁️';
+        return `
+          <tr>
+            <td><div class="font-bold">#${job.id}</div></td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <div class="service-icon">${icon}</div>
+                <span>${job.job_type}</span>
+              </div>
+            </td>
+            <td><span class="text-muted">${date}</span></td>
+            <td><span class="status-pill completed">READY</span></td>
+            <td>
+              <button class="btn btn-primary" style="padding: 0.5rem 1rem; font-size: 0.8rem;" onclick="startRestore(${job.id}, '${job.job_type}')">
+                <i class="ri-restart-line"></i> Restore to ${job.job_type === 'GMAIL' ? 'Gmail' : 'Drive'}
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 2rem; color: var(--error-color);">Error loading backups. <a href="#" onclick="fetchRestoreJobs()">Retry</a></td></tr>`;
+  }
+}
+
+window.startRestore = async function(jobId, type) {
+  if (!confirm(`Are you sure you want to restore backup #${jobId} to your Google account? This will recreate the files/emails as they were at the time of backup.`)) {
+    return;
+  }
+
+  const accountId = getSelectedAccountId();
+  if (!accountId) {
+    alert("Please select an account first.");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/restore?account_id=${accountId}`, { method: 'POST' });
+    if (res.ok) {
+      showTab('activity');
+    } else {
+      const err = await res.json();
+      alert(`Restore failed: ${err.detail || 'Unknown error'}`);
+    }
+  } catch (e) {
+    alert("Connection error while starting restoration.");
+  }
 }
 
 let currentActivityFilter = 'ALL';
@@ -602,9 +762,16 @@ async function fetchActivityJobs(isPolling = false, isLoadMore = false) {
             <td>
               <div class="action-menu" onclick="event.stopPropagation(); toggleDropdown(${job.id})">
                 <button class="action-btn">⋮</button>
-                <div class="dropdown-content" id="dropdown-${job.id}">
-                   <button class="dropdown-item" onclick="expireBackup(${job.id})">Delete Permanent</button>
-                </div>
+                 <div class="dropdown-content" id="dropdown-${job.id}">
+                    ${job.status === 'COMPLETED' ? `
+                      <button class="dropdown-item" onclick="startRestore(${job.id}, '${job.job_type}')">
+                        <i class="ri-restart-line"></i> Restore Data
+                      </button>
+                      <button class="dropdown-item text-danger" onclick="expireBackup(${job.id})">
+                        <i class="ri-delete-bin-line"></i> Permanently Delete
+                      </button>
+                    ` : '<span class="dropdown-item disabled">In Progress...</span>'}
+                 </div>
               </div>
             </td>
           </tr>
@@ -685,7 +852,7 @@ async function loadUsageGraph() {
       const styles = getComputedStyle(document.documentElement);
       const gridColor = 'rgba(0,0,0,0.05)';
       const textColor = styles.getPropertyValue('--text-secondary').trim() || '#64748b';
-      const accentGreen = '#14532d';
+      const accentGreen = '#10B981';
 
       if (usageChartInstance) {
         usageChartInstance.destroy();
@@ -1061,3 +1228,204 @@ async function startBackup(jobType, selectedIds = null) {
 
 // Start application
 init();
+
+window.openPolicyModal = function() {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'policyModal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 850px; height: 600px;">
+      <div class="modal-header">
+        <h2>Create Backup Policy</h2>
+        <button class="close-btn" onclick="closePolicyModal()">×</button>
+      </div>
+      <div style="display: flex; height: calc(100% - 70px);">
+        <!-- Configuration Side -->
+        <div style="flex: 0 0 320px; padding: 1.5rem; border-right: 1px solid var(--border-color); display: flex; flex-direction: column;">
+          <div class="form-group">
+            <label>Policy Name</label>
+            <input type="text" id="policyName" placeholder="e.g. Daily Gmail Backup" class="form-input" style="width: 100%;">
+          </div>
+          
+          <div class="form-group">
+            <label>Service Type</label>
+            <select id="policyType" class="form-input" onchange="togglePolicySelectionUI()" style="width: 100%; background: white;">
+              <option value="GMAIL">Gmail Protection</option>
+              <option value="GDRIVE">Google Drive</option>
+            </select>
+          </div>
+
+          <div style="display: flex; gap: 1rem;">
+            <div class="form-group" style="flex: 1;">
+              <label>Frequency</label>
+              <select id="policyFrequency" class="form-input" style="width: 100%; background: white;">
+                <option value="DAILY">Daily</option>
+                <option value="WEEKLY">Weekly</option>
+                <option value="MONTHLY">Monthly</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label>Start Time</label>
+              <input type="time" id="policyTime" value="02:00" class="form-input" style="width: 100%;">
+            </div>
+          </div>
+
+          <div style="margin-top: auto; display: flex; flex-direction: column; gap: 0.75rem;">
+            <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 45px;" onclick="savePolicy()">Save Policy</button>
+            <button class="btn btn-outline" style="width: 100%; justify-content: center; height: 45px;" onclick="closePolicyModal()">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Selection Side -->
+        <div style="flex: 1; display: flex; flex-direction: column; background: #fbfbfb;">
+           <div id="policySelectionUI" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+              <!-- Dynamic Browser UI -->
+           </div>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  setTimeout(() => {
+    modal.classList.add('active');
+    togglePolicySelectionUI();
+  }, 10);
+}
+
+window.togglePolicySelectionUI = function() {
+  const type = document.getElementById('policyType').value;
+  const container = document.getElementById('policySelectionUI');
+  
+  if (type === 'GDRIVE') {
+    container.innerHTML = `
+      <div class="modal-header" style="background: white; border-bottom: 1px solid var(--border-color); padding: 0.75rem 1.25rem;">
+        <div id="driveBreadcrumbs" class="breadcrumbs" style="font-size: 0.8rem;"></div>
+        <div id="driveSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">0 selected</div>
+      </div>
+      <div id="driveFilesList" style="flex: 1; overflow-y: auto; padding: 0.5rem;"></div>
+    `;
+    selectedDriveFiles.clear();
+    currentDrivePath = [{ id: 'root', name: 'My Drive' }];
+    loadDriveFolder('root');
+  } else {
+    container.innerHTML = `
+      <div class="modal-header" style="background: white; border-bottom: 1px solid var(--border-color); padding: 0.75rem 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+          <div class="font-bold" style="font-size: 0.85rem;">Select Filters</div>
+          <div id="gmailSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">0 selected</div>
+        </div>
+        <div class="search-container" style="width: 100%;">
+          <i class="ri-search-line search-icon"></i>
+          <input type="text" id="gmailFilterInput" class="search-input" placeholder="Search emails..." style="background: #f1f5f9; border: none; font-size: 0.8rem; padding: 0.6rem 1rem 0.6rem 2.75rem;">
+          <button class="btn btn-primary" id="applyGmailFilterBtn" style="position: absolute; right: 4px; top: 4px; padding: 0.25rem 0.75rem; font-size: 0.7rem;">Filter</button>
+        </div>
+      </div>
+      <div id="gmailMessagesList" style="flex: 1; overflow-y: auto; padding: 0.5rem;"></div>
+    `;
+    selectedGmailIds.clear();
+    currentGmailQuery = "";
+    loadGmailMessages("", false);
+    
+    document.getElementById('applyGmailFilterBtn').addEventListener('click', () => {
+      currentGmailQuery = document.getElementById('gmailFilterInput').value;
+      loadGmailMessages(currentGmailQuery, false);
+    });
+  }
+}
+
+window.closePolicyModal = function() {
+  const modal = document.getElementById('policyModal');
+  if (modal) modal.remove();
+}
+
+window.savePolicy = async function() {
+  const name = document.getElementById('policyName').value;
+  const type = document.getElementById('policyType').value;
+  const frequency = document.getElementById('policyFrequency').value;
+  const startTime = document.getElementById('policyTime').value;
+  
+  const selection = type === 'GDRIVE' ? Array.from(selectedDriveFiles) : Array.from(selectedGmailIds);
+
+  if (!name) return alert("Please enter a policy name.");
+
+  try {
+    const res = await fetch(`${API_BASE}/policies/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        account_id: parseInt(accountId),
+        name,
+        job_type: type,
+        frequency,
+        start_time: startTime,
+        selected_ids: selection.length > 0 ? selection : null,
+        is_active: 1
+      })
+    });
+    
+    if (res.ok) {
+      closePolicyModal();
+      fetchPolicies();
+    } else {
+      const err = await res.json();
+      alert("Failed to save policy: " + (err.detail || "Unknown error"));
+    }
+  } catch (e) {
+    alert("Error: " + e.message);
+  }
+}
+
+window.fetchPolicies = async function() {
+  const tbody = document.getElementById('policyTableBody');
+  if (!tbody) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/policies/?account_id=${accountId}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 2rem; color: var(--text-muted);">No automated policies found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = data.map(p => {
+        const lastRun = p.last_run ? new Date(p.last_run).toLocaleString() : 'Never';
+        const typeIcon = p.job_type === 'GMAIL' ? '📧' : '☁️';
+        return `
+          <tr>
+            <td><div class="font-bold">${p.name}</div></td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span>${typeIcon}</span>
+                <span>${p.job_type}</span>
+              </div>
+            </td>
+            <td><span class="status-pill completed">${p.frequency}</span></td>
+            <td><code>${p.start_time}</code></td>
+            <td><span class="text-muted">${lastRun}</span></td>
+            <td>
+              <button class="action-btn" style="color: var(--error-color);" onclick="deletePolicy(${p.id})">
+                <i class="ri-delete-bin-line"></i>
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 2rem; color: var(--error-color);">Failed to load policies.</td></tr>';
+  }
+}
+
+window.deletePolicy = async function(id) {
+  if (!confirm("Are you sure you want to delete this automated policy?")) return;
+  
+  try {
+    const res = await fetch(`${API_BASE}/policies/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      fetchPolicies();
+    }
+  } catch (e) {
+    alert("Error: " + e.message);
+  }
+}
