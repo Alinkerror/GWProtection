@@ -23,6 +23,10 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Google Workspace Protection API")
 
+# Configuration
+BACKUP_ROOT = os.getenv("BACKUP_ROOT", "backups")
+os.makedirs(BACKUP_ROOT, exist_ok=True)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
