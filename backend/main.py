@@ -27,6 +27,20 @@ app = FastAPI(title="Google Workspace Protection API")
 BACKUP_ROOT = os.getenv("BACKUP_ROOT", "backups")
 os.makedirs(BACKUP_ROOT, exist_ok=True)
 
+# Diagnostic Globals
+scheduler_last_check = None
+scheduler_errors = []
+
+@app.get("/scheduler/status")
+def get_scheduler_status():
+    return {
+        "status": "alive",
+        "last_check": scheduler_last_check,
+        "errors": scheduler_errors[-10:],
+        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": time.tzname
+    }
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -303,64 +317,74 @@ def automated_cleanup_worker():
         # Wait for 1 hour
         time.sleep(3600)
 
+def check_and_trigger_policies(db: Session, now: datetime):
+    """Core logic to check and trigger policies. Extracted for testing."""
+    current_time_str = now.strftime("%H:%M")
+    
+    # Find all active policies
+    policies = db.query(models.Policy).filter(models.Policy.is_active == 1).all()
+    
+    triggered_count = 0
+    for policy in policies:
+        try:
+            # Parse start_time (HH:MM)
+            start_h, start_m = map(int, policy.start_time.split(':'))
+            
+            # Calculate the "scheduled run time" for today
+            scheduled_today = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+            
+            should_run = False
+            
+            # 1. If it's already past the scheduled time today
+            if now >= scheduled_today:
+                # 2. Check if it has run today yet
+                if not policy.last_run or policy.last_run < scheduled_today:
+                    # 3. Frequency checks
+                    if policy.frequency == models.Frequency.DAILY:
+                        should_run = True
+                    elif policy.frequency == models.Frequency.WEEKLY:
+                        if not policy.last_run or policy.last_run < scheduled_today - timedelta(days=7):
+                            should_run = True
+                    elif policy.frequency == models.Frequency.MONTHLY:
+                        if not policy.last_run or policy.last_run < scheduled_today - timedelta(days=30):
+                            should_run = True
+            
+            if should_run:
+                print(f"Triggering automated policy: {policy.name} (Account: {policy.account_id})")
+                new_job = models.Job(
+                    account_id=policy.account_id,
+                    job_type=policy.job_type,
+                    status=models.JobStatus.RUNNING,
+                    selected_ids=policy.selected_ids,
+                    filters=policy.filters,
+                    destination_path=os.path.join(BACKUP_ROOT, f"account_{policy.account_id}", f"policy_{policy.id}_{int(now.timestamp())}")
+                )
+                db.add(new_job)
+                policy.last_run = now
+                db.commit()
+                db.refresh(new_job)
+                
+                # Start the job in a new thread
+                threading.Thread(target=run_backup_job, args=(new_job.id, policy.account_id)).start()
+                triggered_count += 1
+        except Exception as policy_err:
+            print(f"Error processing policy {policy.id}: {policy_err}")
+    return triggered_count
+
 def automated_policy_worker():
     """Background thread to check for scheduled policies every minute."""
+    global scheduler_last_check, scheduler_errors
     print("Policy automation worker started.")
     while True:
         db = SessionLocal()
         try:
             now = datetime.now()
-            current_time_str = now.strftime("%H:%M")
-            
-            # Find all active policies
-            policies = db.query(models.Policy).filter(models.Policy.is_active == 1).all()
-            
-            for policy in policies:
-                try:
-                    # Parse start_time (HH:MM)
-                    start_h, start_m = map(int, policy.start_time.split(':'))
-                    
-                    # Calculate the "scheduled run time" for today
-                    scheduled_today = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
-                    
-                    should_run = False
-                    
-                    # 1. If it's already past the scheduled time today
-                    if now >= scheduled_today:
-                        # 2. Check if it has run today yet
-                        if not policy.last_run or policy.last_run < scheduled_today:
-                            # 3. Frequency checks
-                            if policy.frequency == models.Frequency.DAILY:
-                                should_run = True
-                            elif policy.frequency == models.Frequency.WEEKLY:
-                                if not policy.last_run or policy.last_run < scheduled_today - timedelta(days=7):
-                                    should_run = True
-                            elif policy.frequency == models.Frequency.MONTHLY:
-                                if not policy.last_run or policy.last_run < scheduled_today - timedelta(days=30):
-                                    should_run = True
-                    
-                    if should_run:
-                        print(f"Triggering automated policy: {policy.name} (Account: {policy.account_id})")
-                        new_job = models.Job(
-                            account_id=policy.account_id,
-                            job_type=policy.job_type,
-                            status=models.JobStatus.RUNNING,
-                            selected_ids=policy.selected_ids,
-                            filters=policy.filters,
-                            destination_path=os.path.join(BACKUP_ROOT, f"account_{policy.account_id}", f"policy_{policy.id}_{int(now.timestamp())}")
-                        )
-                        db.add(new_job)
-                        policy.last_run = now
-                        db.commit()
-                        db.refresh(new_job)
-                        
-                        # Start the job in a new thread
-                        threading.Thread(target=run_backup_job, args=(new_job.id, policy.account_id)).start()
-                except Exception as policy_err:
-                    print(f"Error processing policy {policy.id}: {policy_err}")
-                    
+            scheduler_last_check = now.strftime("%Y-%m-%d %H:%M:%S")
+            check_and_trigger_policies(db, now)
         except Exception as e:
-            print(f"Policy worker main loop error: {str(e)}")
+            err_msg = f"Policy worker main loop error: {str(e)}"
+            print(err_msg)
+            scheduler_errors.append(err_msg)
             import traceback
             traceback.print_exc()
         finally:
