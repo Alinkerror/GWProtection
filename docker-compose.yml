@@ -11,6 +11,13 @@ services:
       - ./backend/backups:/app/backups
       - ./backend/gwp.db:/app/gwp.db
       - ./.env:/app/.env
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Kolkata
     env_file:
       - .env
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: always

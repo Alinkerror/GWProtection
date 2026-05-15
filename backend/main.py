@@ -176,7 +176,7 @@ def run_backup_job(job_id: int, account_id: int):
             if job:
                 job.status = models.JobStatus.COMPLETED
                 job.destination_path = dest_dir
-                job.completed_at = func.now()
+                job.completed_at = datetime.now()
                 job.processed_items = count # Final sync
             db.commit()
         finally:
@@ -233,7 +233,7 @@ def run_restore_job(restore_job_id: int, source_job_id: int, account_id: int):
             acc = db.query(models.Account).filter(models.Account.id == account_id).first()
             if r_job:
                 r_job.status = models.JobStatus.COMPLETED
-                r_job.completed_at = func.now()
+                r_job.completed_at = datetime.now()
             if acc and new_creds:
                 acc.credentials_json = new_creds
             db.commit()
@@ -272,7 +272,7 @@ def run_expiry_job(expiry_job_id: int, source_job_id: int):
         
         # Update expiry job to COMPLETED
         exp_job.status = models.JobStatus.COMPLETED
-        exp_job.completed_at = func.now()
+        exp_job.completed_at = datetime.now()
         db.commit()
     except Exception as e:
         print(f"Expiry error: {str(e)}")
@@ -367,6 +367,9 @@ def check_and_trigger_policies(db: Session, now: datetime):
                 # Start the job in a new thread
                 threading.Thread(target=run_backup_job, args=(new_job.id, policy.account_id)).start()
                 triggered_count += 1
+            else:
+                # Debug log for skipped policy
+                print(f"Policy {policy.name} (id: {policy.id}) skipped: now={now.strftime('%H:%M')}, scheduled={scheduled_today.strftime('%H:%M')}, last_run={policy.last_run}")
         except Exception as policy_err:
             print(f"Error processing policy {policy.id}: {policy_err}")
     return triggered_count

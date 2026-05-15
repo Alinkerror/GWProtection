@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey
 from sqlalchemy.sql import func
+from datetime import datetime
 import enum
 from database import Base
 
@@ -24,8 +25,8 @@ class Job(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
     job_type = Column(Enum(JobType))
     status = Column(Enum(JobStatus), default=JobStatus.PENDING)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    completed_at = Column(DateTime, nullable=True)
     destination_path = Column(String, nullable=True)
     error_message = Column(String, nullable=True)
     selected_ids = Column(String, nullable=True) # JSON serialized list of IDs
@@ -59,6 +60,6 @@ class Policy(Base):
     selected_ids = Column(String, nullable=True) # JSON serialized list of IDs
     filters = Column(String, nullable=True) # JSON criteria like label and time
     is_active = Column(Integer, default=1) # 1=Active, 0=Paused
-    last_run = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_run = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
 
