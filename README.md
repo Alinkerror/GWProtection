@@ -93,3 +93,7 @@ If you prefer to run the components separately for development:
 1. Run `npm install` from within `/frontend`.
 2. Run `npm run dev` to start the live web server.
    > **Note**: Since the application is now configured for a unified origin, you may need to update the `API_BASE` in `src/main.js` if running the frontend on a different port than the backend.
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
