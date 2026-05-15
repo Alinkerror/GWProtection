@@ -25,16 +25,21 @@ This project is built using a modern separation-of-concerns architecture:
     *   Pagination (`nextPageToken`) is passed back to the frontend to allow infinite scrolling.
 
 3.  **Backup Trigger**:
-    *   The user selects specific files or emails using checkboxes on the frontend UI and hits "Backup Now".
-    *   The frontend makes a `POST /jobs/` request holding exactly which IDs to fetch.
-    *   FastAPI intercepts the request and offloads the deep recursive download task to a background thread (`BackgroundTasks`).
-    *   The frontend automatically navigates to the **Dashboard** and polls `GET /jobs/` every 3 seconds to report status.
+    *   **Manual**: The user selects specific files or emails using checkboxes on the frontend UI and hits "Backup Now".
+    *   **Automated (Policies)**: Users define recurring schedules (Daily, Weekly, Monthly) for specific accounts.
+        *   **Manual Selection Mode**: Backs up a fixed set of IDs at scheduled intervals.
+        *   **Dynamic Filter Mode**: Automatically searches and backs up new data matching criteria like `label:ICICI` and `newer_than:24h`.
 
 4.  **Usage & Analytics**:
     *   Data sizes are calculated on-the-fly by the backend walking the local `backups/` directory.
     *   `GET /usage/` returns a chronological series of storage footprints (MB) rendered as a premium line graph on the frontend.
 
-5.  **Job Expiration**:
+5.  **Policy Engine & Scheduler**:
+    *   A dedicated background thread in `main.py` polls for due policies every minute.
+    *   It checks the `frequency` (Daily/Weekly/Monthly) and `start_time` against the current server time.
+    *   When triggered, it spawns a new `Job` and propagates the saved filters or selection IDs.
+
+6.  **Job Expiration**:
     *   Users can "Expire" backups from the Dashboard action menu.
     *   `DELETE /jobs/{id}` triggers a recursive `shutil.rmtree` on the backend, purging physical files and database rows simultaneously.
 
