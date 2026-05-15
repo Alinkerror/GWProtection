@@ -503,6 +503,31 @@ def delete_policy(policy_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success"}
 
+@app.put("/policies/{policy_id}", response_model=schemas.PolicyResponse)
+def update_policy(policy_id: int, policy: schemas.PolicyCreate, db: Session = Depends(get_db)):
+    db_policy = db.query(models.Policy).filter(models.Policy.id == policy_id).first()
+    if not db_policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    db_policy.name = policy.name
+    db_policy.job_type = policy.job_type
+    db_policy.frequency = models.Frequency(policy.frequency)
+    db_policy.start_time = policy.start_time
+    db_policy.selected_ids = json.dumps(policy.selected_ids) if policy.selected_ids else None
+    db_policy.filters = json.dumps(policy.filters) if policy.filters else None
+    db_policy.is_active = policy.is_active
+    
+    db.commit()
+    db.refresh(db_policy)
+    return db_policy
+
+@app.get("/policies/{policy_id}", response_model=schemas.PolicyResponse)
+def get_policy(policy_id: int, db: Session = Depends(get_db)):
+    policy = db.query(models.Policy).filter(models.Policy.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    return policy
+
 @app.get("/jobs/stats")
 def get_job_stats(db: Session = Depends(get_db)):
     total = db.query(models.Job).filter(models.Job.job_type.in_([models.JobType.GMAIL, models.JobType.GDRIVE])).count()

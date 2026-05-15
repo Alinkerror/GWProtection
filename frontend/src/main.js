@@ -15,6 +15,7 @@ let gmailPageHistory = [];
 let currentGmailQuery = "";
 let gmailLabels = [];
 let usageChartInstance = null;
+let editingPolicyId = null;
 
 async function init() {
   // Initialize theme first
@@ -1302,14 +1303,15 @@ async function startBackup(jobType, selectedIds = null) {
 // Start application
 init();
 
-window.openPolicyModal = function() {
+window.openPolicyModal = function(editData = null) {
+  editingPolicyId = editData ? editData.id : null;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.id = 'policyModal';
   modal.innerHTML = `
     <div class="modal-content" style="max-width: 1100px; height: 800px;">
       <div class="modal-header">
-        <h2>Create Backup Policy</h2>
+        <h2>${editingPolicyId ? 'Edit Backup Policy' : 'Create Backup Policy'}</h2>
         <button class="close-btn" onclick="closePolicyModal()">×</button>
       </div>
       <div style="display: flex; height: calc(100% - 70px);">
@@ -1317,7 +1319,7 @@ window.openPolicyModal = function() {
         <div style="flex: 0 0 320px; padding: 1.5rem; border-right: 1px solid var(--border-color); display: flex; flex-direction: column;">
           <div class="form-group">
             <label>Policy Name</label>
-            <input type="text" id="policyName" placeholder="e.g. Daily Gmail Backup" class="form-input" style="width: 100%;">
+            <input type="text" id="policyName" value="${editData?.name || ''}" placeholder="e.g. Daily Gmail Backup" class="form-input" style="width: 100%;">
           </div>
           
           <div class="form-group">
@@ -1347,7 +1349,7 @@ window.openPolicyModal = function() {
             </div>
             <div class="form-group" style="flex: 1;">
               <label>Start Time</label>
-              <input type="time" id="policyTime" value="02:00" class="form-input" style="width: 100%;">
+              <input type="time" id="policyTime" value="${editData?.start_time || '02:00'}" class="form-input" style="width: 100%;">
             </div>
           </div>
 
@@ -1369,7 +1371,25 @@ window.openPolicyModal = function() {
   document.body.appendChild(modal);
   setTimeout(() => {
     modal.classList.add('active');
-    togglePolicySelectionUI();
+    
+    if (editData) {
+      document.getElementById('policyType').value = editData.job_type;
+      if (editData.job_type === 'GMAIL') {
+        document.getElementById('gmailMethodGroup').style.display = 'block';
+        document.getElementById('gmailBackupMethod').value = editData.filters ? 'FILTER' : 'MANUAL';
+      }
+      document.getElementById('policyFrequency').value = editData.frequency;
+      
+      if (editData.job_type === 'GDRIVE') {
+        selectedDriveFiles = new Set(editData.selected_ids || []);
+      } else if (editData.job_type === 'GMAIL') {
+        if (!editData.filters) {
+          selectedGmailIds = new Set(editData.selected_ids || []);
+        }
+      }
+    }
+    
+    togglePolicySelectionUI(editData);
   }, 10);
 }
 
@@ -1384,7 +1404,7 @@ window.onPolicyTypeChange = function() {
   togglePolicySelectionUI();
 }
 
-window.togglePolicySelectionUI = async function() {
+window.togglePolicySelectionUI = async function(editData = null) {
   const type = document.getElementById('policyType').value;
   const container = document.getElementById('policySelectionUI');
   
@@ -1392,11 +1412,11 @@ window.togglePolicySelectionUI = async function() {
     container.innerHTML = `
       <div class="modal-header" style="background: white; border-bottom: 1px solid var(--border-color); padding: 0.75rem 1.25rem;">
         <div id="driveBreadcrumbs" class="breadcrumbs" style="font-size: 0.8rem;"></div>
-        <div id="driveSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">0 selected</div>
+        <div id="driveSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">${selectedDriveFiles.size} selected</div>
       </div>
       <div id="driveFilesList" style="flex: 1; overflow-y: auto; padding: 0.5rem;"></div>
     `;
-    selectedDriveFiles.clear();
+    if (!editData) selectedDriveFiles.clear();
     currentDrivePath = [{ id: 'root', name: 'My Drive' }];
     loadDriveFolder('root');
   } else {
@@ -1407,7 +1427,7 @@ window.togglePolicySelectionUI = async function() {
         <div class="modal-header" style="background: white; border-bottom: 1px solid var(--border-color); padding: 0.75rem 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
           <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
             <div class="font-bold" style="font-size: 0.85rem;">Select Emails Manually</div>
-            <div id="gmailSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">0 selected</div>
+            <div id="gmailSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">${selectedGmailIds.size} selected</div>
           </div>
           <div class="search-container" style="width: 100%;">
             <i class="ri-search-line search-icon"></i>
@@ -1418,7 +1438,7 @@ window.togglePolicySelectionUI = async function() {
         <div id="gmailMessagesList" style="flex: 1; overflow-y: auto; padding: 0.5rem;"></div>
         <div id="gmailPagination"></div>
       `;
-      selectedGmailIds.clear();
+      if (!editData) selectedGmailIds.clear();
       currentGmailQuery = "";
       gmailPageHistory = [];
       loadGmailMessages("", null);
@@ -1470,19 +1490,22 @@ window.togglePolicySelectionUI = async function() {
       `;
       
       // Load labels and initial preview
-      fetchGmailLabels();
+      fetchGmailLabels(editData?.filters?.label);
       updateGmailPreview();
       
       // Add event listeners for preview refresh
       setTimeout(() => {
         document.getElementById('gmailFilterLabel').addEventListener('change', updateGmailPreview);
         document.getElementById('gmailFilterTime').addEventListener('change', updateGmailPreview);
+        if (editData?.filters?.newer_than) {
+          document.getElementById('gmailFilterTime').value = editData.filters.newer_than;
+        }
       }, 100);
     }
   }
 }
 
-async function fetchGmailLabels() {
+async function fetchGmailLabels(selectedLabel = null) {
   try {
     const response = await fetch(`${API_BASE}/gmail/labels/?account_id=${accountId}`);
     const labels = await response.json();
@@ -1500,7 +1523,11 @@ async function fetchGmailLabels() {
             // Actually, for search query q, we need the name.
             opt.value = label.name; 
             opt.innerText = label.name;
-            if (label.id === 'INBOX') opt.selected = true;
+            if (selectedLabel) {
+              if (label.name === selectedLabel) opt.selected = true;
+            } else if (label.id === 'INBOX') {
+              opt.selected = true;
+            }
             select.appendChild(opt);
           });
   } catch (err) {
@@ -1591,8 +1618,11 @@ window.savePolicy = async function() {
   if (!name) return alert("Please enter a policy name.");
 
   try {
-    const res = await fetch(`${API_BASE}/policies/`, {
-      method: 'POST',
+    const url = editingPolicyId ? `${API_BASE}/policies/${editingPolicyId}` : `${API_BASE}/policies/`;
+    const method = editingPolicyId ? 'PUT' : 'POST';
+    
+    const res = await fetch(url, {
+      method: method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         account_id: parseInt(accountId),
@@ -1657,9 +1687,14 @@ window.fetchPolicies = async function() {
             <td><code>${p.start_time}</code></td>
             <td><span class="text-muted">${lastRun}</span></td>
             <td>
-              <button class="action-btn" style="color: var(--error-color);" onclick="deletePolicy(${p.id})">
-                <i class="ri-delete-bin-line"></i>
-              </button>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="action-btn" onclick="editPolicy(${p.id})">
+                  <i class="ri-edit-line"></i>
+                </button>
+                <button class="action-btn" style="color: var(--error-color);" onclick="deletePolicy(${p.id})">
+                  <i class="ri-delete-bin-line"></i>
+                </button>
+              </div>
             </td>
           </tr>
         `;
@@ -1677,6 +1712,20 @@ window.deletePolicy = async function(id) {
     const res = await fetch(`${API_BASE}/policies/${id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchPolicies();
+    }
+  } catch (e) {
+    alert("Error: " + e.message);
+  }
+}
+
+window.editPolicy = async function(id) {
+  try {
+    const res = await fetch(`${API_BASE}/policies/${id}`);
+    if (res.ok) {
+      const data = await res.json();
+      openPolicyModal(data);
+    } else {
+      alert("Failed to load policy details.");
     }
   } catch (e) {
     alert("Error: " + e.message);
