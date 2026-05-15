@@ -29,6 +29,7 @@ class Job(Base):
     destination_path = Column(String, nullable=True)
     error_message = Column(String, nullable=True)
     selected_ids = Column(String, nullable=True) # JSON serialized list of IDs
+    filters = Column(String, nullable=True) # JSON criteria
 
 class Account(Base):
     __tablename__ = "accounts"
@@ -54,6 +55,7 @@ class Policy(Base):
     frequency = Column(Enum(Frequency))
     start_time = Column(String) # HH:MM
     selected_ids = Column(String, nullable=True) # JSON serialized list of IDs
+    filters = Column(String, nullable=True) # JSON criteria like label and time
     is_active = Column(Integer, default=1) # 1=Active, 0=Paused
     last_run = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

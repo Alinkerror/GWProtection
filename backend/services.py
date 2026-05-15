@@ -201,93 +201,116 @@ def list_gmail_messages(credentials_json: str, query_str: str = None, page_token
 
     service = build('gmail', 'v1', credentials=creds)
     
-    q = ""
-    if query_str:
-        q = f"label:{query_str}"
+    q = query_str if query_str else ""
         
     results = service.users().messages().list(
         userId='me',
         q=q,
-        maxResults=25,
+        maxResults=30,
         pageToken=page_token
     ).execute()
     
     messages = results.get('messages', [])
     next_page_token = results.get('nextPageToken')
     
-    hydrated_messages = []
-    for msg in messages:
-        try:
-            msg_full = service.users().messages().get(
-                userId='me', 
-                id=msg['id'], 
-                format='metadata',
-                metadataHeaders=['Subject', 'From', 'Date']
-            ).execute()
-            
-            headers = msg_full.get('payload', {}).get('headers', [])
-            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(No Subject)')
-            sender = next((h['value'] for h in headers if h['name'] == 'From'), '(Unknown)')
-            date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-            
-            hydrated_messages.append({
-                'id': msg['id'],
-                'threadId': msg['threadId'],
-                'subject': subject,
-                'from': sender,
-                'date': date
-            })
-        except Exception:
-            pass
-            
-    return {"messages": hydrated_messages, "nextPageToken": next_page_token}, new_creds_json
-
-async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids: list = None):
-    creds = build_creds(credentials_json)
+    hydrated_messages = [None] * len(messages)
     
-    from google.auth.transport.requests import Request
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            raise Exception("Credentials expired. Please login again.")
+    def callback(request_id, response, exception):
+        if exception is not None:
+            print(f"Gmail hydration error for ID {request_id}: {exception}")
+            return
+        
+        idx = int(request_id)
+        headers = response.get('payload', {}).get('headers', [])
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(No Subject)')
+        sender = next((h['value'] for h in headers if h['name'] == 'From'), '(Unknown)')
+        date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+        
+        hydrated_messages[idx] = {
+            'id': response['id'],
+            'threadId': response['threadId'],
+            'subject': subject,
+            'from': sender,
+            'date': date
+        }
 
+    batch = service.new_batch_http_request(callback=callback)
+    for i, msg in enumerate(messages):
+        batch.add(service.users().messages().get(
+            userId='me', 
+            id=msg['id'], 
+            format='metadata',
+            metadataHeaders=['Subject', 'From', 'Date']
+        ), request_id=str(i))
+    
+    batch.execute()
+            
+    return {"messages": [m for m in hydrated_messages if m is not None], "nextPageToken": next_page_token}, new_creds_json
+
+def get_gmail_labels(credentials_json: str):
+    creds = build_creds(credentials_json)
+    service = build('gmail', 'v1', credentials=creds)
+    results = service.users().labels().list(userId='me').execute()
+    labels = results.get('labels', [])
+    
+    # Filter for useful labels (System and User)
+    return [{"id": l['id'], "name": l['name'], "type": l['type']} for l in labels]
+
+async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids: list = None, query: str = None):
+    creds = build_creds(credentials_json)
     service = build('gmail', 'v1', credentials=creds)
     
-    os.makedirs(destination_dir, exist_ok=True)
+    ids_to_backup = selected_ids or []
     
-    async def download_email(msg_id):
+    if query:
+        # If a query is provided, search for messages first
+        results = service.users().messages().list(userId='me', q=query, maxResults=500).execute()
+        messages = results.get('messages', [])
+        ids_to_backup = [m['id'] for m in messages]
+        
+    if not ids_to_backup:
+        return 0
+
+    os.makedirs(destination_dir, exist_ok=True)
+    count = 0
+    
+    import base64
+    for msg_id in ids_to_backup:
         try:
-            msg_raw = service.users().messages().get(userId='me', id=msg_id, format='raw').execute()
-            msg_bytes = base64.urlsafe_b64decode(msg_raw['raw'].encode('ASCII'))
+            msg = service.users().messages().get(userId='me', id=msg_id, format='raw').execute()
+            msg_bytes = base64.urlsafe_b64decode(msg['raw'].encode('ASCII'))
             
-            file_path = os.path.join(destination_dir, f"{msg_id}.eml")
-            async with aiofiles.open(file_path, "wb") as f:
-                await f.write(msg_bytes)
+            with open(os.path.join(destination_dir, f"{msg_id}.eml"), 'wb') as f:
+                f.write(msg_bytes)
+            count += 1
         except Exception:
             pass
             
-    items_to_process = []
+    return count
+
+async def backup_gdrive(credentials_json: str, destination_dir: str, selected_ids: list = None):
+    creds = build_creds(credentials_json)
+    service = build('drive', 'v3', credentials=creds)
     
-    if selected_ids:
-        items_to_process = selected_ids
-    else:
-        page_token = None
-        while True:
-            results = service.users().messages().list(userId='me', pageToken=page_token).execute()
-            for msg in results.get('messages', []):
-                items_to_process.append(msg['id'])
-            page_token = results.get('nextPageToken')
-            if not page_token:
-                break
-                
-    new_creds_json = creds.to_json() if creds.valid else None
+    if not selected_ids:
+        return 0
 
-    for msg_id in items_to_process:
-        await download_email(msg_id)
-        
-    return f"Backed up {len(items_to_process)} emails structure to {destination_dir}", new_creds_json
-
+    os.makedirs(destination_dir, exist_ok=True)
+    count = 0
+    
+    for file_id in selected_ids:
+        try:
+            file_meta = service.files().get(fileId=file_id).execute()
+            request = service.files().get_media(fileId=file_id)
+            
+            file_path = os.path.join(destination_dir, file_meta['name'])
+            with open(file_path, 'wb') as f:
+                f.write(request.execute())
+            count += 1
+        except Exception:
+            pass
+            
+    return count
 async def restore_gdrive(credentials_json: str, source_dir: str):
     creds = build_creds(credentials_json)
     from google.auth.transport.requests import Request

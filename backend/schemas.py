@@ -37,6 +37,7 @@ class PolicyBase(BaseModel):
     frequency: str # DAILY, WEEKLY, MONTHLY
     start_time: str # HH:MM
     selected_ids: Optional[List[str]] = None
+    filters: Optional[dict] = None
     is_active: int = 1
 
     @field_validator('selected_ids', mode='before')
@@ -47,6 +48,16 @@ class PolicyBase(BaseModel):
                 return json.loads(v)
             except:
                 return []
+        return v
+
+    @field_validator('filters', mode='before')
+    @classmethod
+    def parse_filters(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except:
+                return None
         return v
 
 class PolicyCreate(PolicyBase):

@@ -11,7 +11,9 @@ let currentNextPageToken = null;
 
 let selectedGmailIds = new Set();
 let currentGmailNextPageToken = null;
+let gmailPageHistory = [];
 let currentGmailQuery = "";
+let gmailLabels = [];
 let usageChartInstance = null;
 
 async function init() {
@@ -276,7 +278,7 @@ function renderDashboardView(container) {
     <div class="metrics-grid">
       <div class="metrics-card primary">
         <div class="metrics-label">
-          <span>Total Protected</span>
+          <span>Total Backups</span>
           <i class="ri-folder-shield-2-line"></i>
         </div>
         <div class="metrics-value" id="stat-total-jobs">--</div>
@@ -387,14 +389,22 @@ async function fetchJobsAndPopulateTable() {
       if (!tbody) return; 
       
       // Update stats
-      const totalEl = document.getElementById('stat-total-jobs');
-      if (totalEl) totalEl.innerText = jobsData.length;
-      
-      const gmailEl = document.getElementById('stat-gmail-jobs');
-      if (gmailEl) gmailEl.innerText = jobsData.filter(j => j.job_type === 'GMAIL').length;
-      
-      const driveEl = document.getElementById('stat-drive-jobs');
-      if (driveEl) driveEl.innerText = jobsData.filter(j => j.job_type === 'GDRIVE').length;
+      try {
+        const statsRes = await fetch(`${API_BASE}/jobs/stats`);
+        if (statsRes.ok) {
+          const stats = await statsRes.json();
+          const totalEl = document.getElementById('stat-total-jobs');
+          if (totalEl) totalEl.innerText = stats.total;
+          
+          const gmailEl = document.getElementById('stat-gmail-jobs');
+          if (gmailEl) gmailEl.innerText = stats.gmail;
+          
+          const driveEl = document.getElementById('stat-drive-jobs');
+          if (driveEl) driveEl.innerText = stats.drive;
+        }
+      } catch (err) {
+        console.error("Error fetching stats:", err);
+      }
       
       if (jobsData.length === 0) {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 2rem; color: var(--text-secondary);">No jobs found. Navigate to Backup to start one.</td></tr>`;
@@ -1015,32 +1025,27 @@ function updateGmailSelectionCount() {
   if (el) el.innerText = `${selectedGmailIds.size} email(s) selected`;
 }
 
-async function loadGmailMessages(queryStr = "", loadMore = false) {
+async function loadGmailMessages(queryStr = "", pageToken = null) {
   const listContainer = document.getElementById('gmailMessagesList');
-  if (!loadMore) {
-    listContainer.innerHTML = '<div style="text-align:center; padding: 2rem;">Loading emails...</div>';
-    currentGmailNextPageToken = null;
-  } else {
-    const btn = document.getElementById('gmailLoadMoreBtn');
-    if (btn) btn.innerText = 'Loading...';
-  }
+  listContainer.innerHTML = '<div style="text-align:center; padding: 4rem; display:flex; flex-direction:column; align-items:center; gap:1rem;">' +
+    '<div class="loading-spinner"></div>' +
+    '<div style="color:var(--text-muted); font-size:0.9rem;">Fetching emails...</div>' +
+    '</div>';
 
   try {
     let url = `${API_BASE}/gmail/messages/?account_id=${accountId}`;
     if (queryStr) url += `&query=${encodeURIComponent(queryStr)}`;
-    if (loadMore && currentGmailNextPageToken) url += `&page_token=${currentGmailNextPageToken}`;
+    if (pageToken) url += `&page_token=${pageToken}`;
     
     const response = await fetch(url);
     if (!response.ok) throw new Error('Failed to fetch messages');
     const data = await response.json();
     
-    if (!loadMore) listContainer.innerHTML = '';
-    
-    const oldBtn = document.getElementById('gmailLoadMoreBtn');
-    if (oldBtn) oldBtn.remove();
+    listContainer.innerHTML = '';
 
-    if (!loadMore && (!data.messages || data.messages.length === 0)) {
-       listContainer.innerHTML = '<div style="text-align:center; padding: 2rem; color: var(--text-secondary)">No emails found.</div>';
+    if (!data.messages || data.messages.length === 0) {
+       listContainer.innerHTML = '<div style="text-align:center; padding: 4rem; color: var(--text-secondary)">No emails found.</div>';
+       renderGmailPagination(null, pageToken);
        return;
     }
 
@@ -1054,7 +1059,7 @@ async function loadGmailMessages(queryStr = "", loadMore = false) {
           ${isSelected ? '<span class="check-mark">✓</span>' : ''}
         </div>
         <div class="file-info" style="flex:1; overflow:hidden; min-width: 0;">
-          <div style="font-weight: 600; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; margin-bottom: 0.2rem;">${msg.subject}</div>
+          <div style="font-weight: 600; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; margin-bottom: 0.2rem; color: var(--text-primary);">${msg.subject}</div>
           <div style="font-size: 0.75rem; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">From: ${msg.from}</div>
         </div>
         <div style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; margin-left: 1rem; font-weight: 600;">
@@ -1069,19 +1074,63 @@ async function loadGmailMessages(queryStr = "", loadMore = false) {
       listContainer.appendChild(div);
     });
     
-    currentGmailNextPageToken = data.nextPageToken;
-    if (currentGmailNextPageToken) {
-      const loadBtn = document.createElement('div');
-      loadBtn.id = 'gmailLoadMoreBtn';
-      loadBtn.className = 'load-more-btn';
-      loadBtn.innerText = 'Load More Emails...';
-      loadBtn.onclick = () => loadGmailMessages(queryStr, true);
-      listContainer.appendChild(loadBtn);
-    }
+    renderGmailPagination(data.nextPageToken, pageToken);
     
   } catch (err) {
-    if (!loadMore) listContainer.innerHTML = `<div style="color:#f85149; padding:1rem;">Error: ${err.message}</div>`;
+    listContainer.innerHTML = `<div style="color:#f85149; padding:2rem; text-align:center;">Error: ${err.message}</div>`;
   }
+}
+
+function renderGmailPagination(nextPageToken, currentPageToken) {
+  const container = document.getElementById('gmailPagination');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  const footer = document.createElement('div');
+  footer.style.display = 'flex';
+  footer.style.justifyContent = 'space-between';
+  footer.style.alignItems = 'center';
+  footer.style.padding = '1rem 1.5rem';
+  footer.style.borderTop = '1px solid var(--border-color)';
+  footer.style.background = '#fff';
+
+  // Prev Button
+  const prevBtn = document.createElement('button');
+  prevBtn.className = 'btn btn-outline';
+  prevBtn.style.padding = '0.5rem 1rem';
+  prevBtn.innerHTML = '<i class="ri-arrow-left-s-line"></i> Previous';
+  prevBtn.disabled = gmailPageHistory.length === 0;
+  prevBtn.onclick = () => prevGmailPage();
+  footer.appendChild(prevBtn);
+
+  // Page Info
+  const info = document.createElement('div');
+  info.style.fontSize = '0.85rem';
+  info.style.color = 'var(--text-muted)';
+  info.style.fontWeight = '500';
+  info.innerText = `Page ${gmailPageHistory.length + 1}`;
+  footer.appendChild(info);
+
+  // Next Button
+  const nextBtn = document.createElement('button');
+  nextBtn.className = 'btn btn-outline';
+  nextBtn.style.padding = '0.5rem 1rem';
+  nextBtn.innerHTML = 'Next <i class="ri-arrow-right-s-line"></i>';
+  nextBtn.disabled = !nextPageToken;
+  nextBtn.onclick = () => nextGmailPage(nextPageToken, currentPageToken || '');
+  footer.appendChild(nextBtn);
+
+  container.appendChild(footer);
+}
+
+window.nextGmailPage = function(nextToken, currentToken) {
+  gmailPageHistory.push(currentToken);
+  loadGmailMessages(currentGmailQuery, nextToken);
+}
+
+window.prevGmailPage = function() {
+  const prevToken = gmailPageHistory.pop();
+  loadGmailMessages(currentGmailQuery, prevToken || null);
 }
 
 function toggleGmailSelection(fileId, itemDiv) {
@@ -1234,7 +1283,7 @@ window.openPolicyModal = function() {
   modal.className = 'modal-overlay';
   modal.id = 'policyModal';
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: 850px; height: 600px;">
+    <div class="modal-content" style="max-width: 1100px; height: 800px;">
       <div class="modal-header">
         <h2>Create Backup Policy</h2>
         <button class="close-btn" onclick="closePolicyModal()">×</button>
@@ -1249,9 +1298,17 @@ window.openPolicyModal = function() {
           
           <div class="form-group">
             <label>Service Type</label>
-            <select id="policyType" class="form-input" onchange="togglePolicySelectionUI()" style="width: 100%; background: white;">
+            <select id="policyType" class="form-input" onchange="onPolicyTypeChange()" style="width: 100%; background: white;">
               <option value="GMAIL">Gmail Protection</option>
               <option value="GDRIVE">Google Drive</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="gmailMethodGroup">
+            <label>Backup Method</label>
+            <select id="gmailBackupMethod" class="form-input" onchange="togglePolicySelectionUI()" style="width: 100%; background: white;">
+              <option value="FILTER">Dynamic Filter (Recommended)</option>
+              <option value="MANUAL">Manual Selection</option>
             </select>
           </div>
 
@@ -1292,7 +1349,18 @@ window.openPolicyModal = function() {
   }, 10);
 }
 
-window.togglePolicySelectionUI = function() {
+window.onPolicyTypeChange = function() {
+  const type = document.getElementById('policyType').value;
+  const methodGroup = document.getElementById('gmailMethodGroup');
+  if (type === 'GMAIL') {
+    methodGroup.style.display = 'block';
+  } else {
+    methodGroup.style.display = 'none';
+  }
+  togglePolicySelectionUI();
+}
+
+window.togglePolicySelectionUI = async function() {
   const type = document.getElementById('policyType').value;
   const container = document.getElementById('policySelectionUI');
   
@@ -1308,28 +1376,161 @@ window.togglePolicySelectionUI = function() {
     currentDrivePath = [{ id: 'root', name: 'My Drive' }];
     loadDriveFolder('root');
   } else {
-    container.innerHTML = `
-      <div class="modal-header" style="background: white; border-bottom: 1px solid var(--border-color); padding: 0.75rem 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-          <div class="font-bold" style="font-size: 0.85rem;">Select Filters</div>
-          <div id="gmailSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">0 selected</div>
-        </div>
-        <div class="search-container" style="width: 100%;">
-          <i class="ri-search-line search-icon"></i>
-          <input type="text" id="gmailFilterInput" class="search-input" placeholder="Search emails..." style="background: #f1f5f9; border: none; font-size: 0.8rem; padding: 0.6rem 1rem 0.6rem 2.75rem;">
-          <button class="btn btn-primary" id="applyGmailFilterBtn" style="position: absolute; right: 4px; top: 4px; padding: 0.25rem 0.75rem; font-size: 0.7rem;">Filter</button>
-        </div>
-      </div>
-      <div id="gmailMessagesList" style="flex: 1; overflow-y: auto; padding: 0.5rem;"></div>
-    `;
-    selectedGmailIds.clear();
-    currentGmailQuery = "";
-    loadGmailMessages("", false);
+    const method = document.getElementById('gmailBackupMethod').value;
     
-    document.getElementById('applyGmailFilterBtn').addEventListener('click', () => {
-      currentGmailQuery = document.getElementById('gmailFilterInput').value;
-      loadGmailMessages(currentGmailQuery, false);
+    if (method === 'MANUAL') {
+      container.innerHTML = `
+        <div class="modal-header" style="background: white; border-bottom: 1px solid var(--border-color); padding: 0.75rem 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div class="font-bold" style="font-size: 0.85rem;">Select Emails Manually</div>
+            <div id="gmailSelectionCount" style="font-size: 0.8rem; color: var(--accent-primary); font-weight: 600;">0 selected</div>
+          </div>
+          <div class="search-container" style="width: 100%;">
+            <i class="ri-search-line search-icon"></i>
+            <input type="text" id="gmailFilterInput" class="search-input" placeholder="Search emails..." style="background: #f1f5f9; border: none; font-size: 0.8rem; padding: 0.6rem 1rem 0.6rem 2.75rem;">
+            <button class="btn btn-primary" id="applyGmailFilterBtn" style="position: absolute; right: 4px; top: 4px; padding: 0.25rem 0.75rem; font-size: 0.7rem;">Filter</button>
+          </div>
+        </div>
+        <div id="gmailMessagesList" style="flex: 1; overflow-y: auto; padding: 0.5rem;"></div>
+        <div id="gmailPagination"></div>
+      `;
+      selectedGmailIds.clear();
+      currentGmailQuery = "";
+      gmailPageHistory = [];
+      loadGmailMessages("", null);
+      
+      document.getElementById('applyGmailFilterBtn').addEventListener('click', () => {
+        currentGmailQuery = document.getElementById('gmailFilterInput').value;
+        gmailPageHistory = [];
+        loadGmailMessages(currentGmailQuery, null);
+      });
+    } else {
+      // Dynamic Filter UI
+      container.innerHTML = `
+        <div style="padding: 2.5rem; display: flex; flex-direction: column; gap: 2rem; height: 100%; overflow-y: auto;">
+          <div style="background: var(--accent-primary-light); padding: 1.5rem; border-radius: var(--border-radius-md); border: 1px solid var(--accent-primary);">
+            <div style="display:flex; gap: 1rem; align-items: center; color: var(--accent-primary-dark); font-weight: 700; margin-bottom: 0.5rem;">
+               <i class="ri-magic-line" style="font-size: 1.2rem;"></i> Dynamic Protection Active
+            </div>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0;">This policy will automatically backup any new emails matching the filters below every time it runs.</p>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <div class="form-group">
+              <label>GMail Label</label>
+              <select id="gmailFilterLabel" class="form-input" style="width: 100%; background: white;">
+                <option value="">All Mail (Inbox)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Time Condition</label>
+              <select id="gmailFilterTime" class="form-input" style="width: 100%; background: white;">
+                <option value="1d">Last 24 Hours</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+                <option value="">All Time</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-top: 1rem;">
+             <h4 style="margin-bottom: 1rem; display: flex; align-items:center; gap:0.5rem;">
+               <i class="ri-eye-line"></i> Matching Emails Preview
+               <span style="font-size: 0.75rem; font-weight: normal; color: var(--text-muted)">(Showing first 5)</span>
+             </h4>
+             <div id="gmailPreviewList" style="background: white; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); min-height: 200px;">
+                <div style="padding: 2rem; text-align: center; color: var(--text-muted)">Loading preview...</div>
+             </div>
+          </div>
+        </div>
+      `;
+      
+      // Load labels and initial preview
+      fetchGmailLabels();
+      updateGmailPreview();
+      
+      // Add event listeners for preview refresh
+      setTimeout(() => {
+        document.getElementById('gmailFilterLabel').addEventListener('change', updateGmailPreview);
+        document.getElementById('gmailFilterTime').addEventListener('change', updateGmailPreview);
+      }, 100);
+    }
+  }
+}
+
+async function fetchGmailLabels() {
+  try {
+    const response = await fetch(`${API_BASE}/gmail/labels/?account_id=${accountId}`);
+    const labels = await response.json();
+    const select = document.getElementById('gmailFilterLabel');
+    if (!select) return;
+    
+    // Clear and add "All Mail"
+    select.innerHTML = '<option value="">All Mail</option>';
+    
+    labels.filter(l => l.type === 'user' || ['INBOX', 'SENT', 'DRAFT', 'IMPORTANT'].includes(l.id))
+          .sort((a,b) => a.name.localeCompare(b.name))
+          .forEach(label => {
+            const opt = document.createElement('option');
+            // Use name for search query, but keep ID for potential future use if needed.
+            // Actually, for search query q, we need the name.
+            opt.value = label.name; 
+            opt.innerText = label.name;
+            if (label.id === 'INBOX') opt.selected = true;
+            select.appendChild(opt);
+          });
+  } catch (err) {
+    console.error('Failed to fetch labels', err);
+  }
+}
+
+async function updateGmailPreview() {
+  const list = document.getElementById('gmailPreviewList');
+  if (!list) return;
+  
+  const label = document.getElementById('gmailFilterLabel').value;
+  const time = document.getElementById('gmailFilterTime').value;
+  
+  let q = "";
+  if (label) {
+    // Quote label name if it contains spaces
+    const quotedLabel = label.includes(" ") ? `"${label}"` : label;
+    q += `label:${quotedLabel} `;
+  }
+  if (time) q += `newer_than:${time} `;
+  
+  try {
+    const url = `${API_BASE}/gmail/messages/?account_id=${accountId}&query=${encodeURIComponent(q)}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    list.innerHTML = '';
+    if (!data.messages || data.messages.length === 0) {
+      list.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-muted)">No emails found matching these filters.</div>';
+      return;
+    }
+    
+    data.messages.slice(0, 5).forEach(msg => {
+      const row = document.createElement('div');
+      row.style = 'padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; display: flex; justify-content: space-between;';
+      row.innerHTML = `
+        <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; padding-right: 1rem;">
+          <strong style="color: var(--text-primary)">${msg.subject}</strong><br>
+          <span style="color: var(--text-muted); font-size: 0.75rem;">From: ${msg.from}</span>
+        </div>
+        <div style="color: var(--text-muted); font-size: 0.75rem; white-space: nowrap;">${new Date(msg.date).toLocaleDateString()}</div>
+      `;
+      list.appendChild(row);
     });
+    
+    if (data.messages.length > 5) {
+       const more = document.createElement('div');
+       more.style = 'padding: 0.5rem; text-align: center; font-size: 0.75rem; color: var(--text-muted); background: #f9fafb;';
+       more.innerText = `+ ${data.messages.length - 5} more matching emails`;
+       list.appendChild(more);
+    }
+  } catch (err) {
+    list.innerHTML = '<div style="padding: 2rem; text-align: center; color: #f85149">Failed to load preview.</div>';
   }
 }
 
@@ -1344,7 +1545,24 @@ window.savePolicy = async function() {
   const frequency = document.getElementById('policyFrequency').value;
   const startTime = document.getElementById('policyTime').value;
   
-  const selection = type === 'GDRIVE' ? Array.from(selectedDriveFiles) : Array.from(selectedGmailIds);
+  let selection = null;
+  let filters = null;
+
+  if (type === 'GDRIVE') {
+    selection = Array.from(selectedDriveFiles);
+    if (selection.length === 0) return alert("Please select at least one file.");
+  } else {
+    const method = document.getElementById('gmailBackupMethod').value;
+    if (method === 'MANUAL') {
+      selection = Array.from(selectedGmailIds);
+      if (selection.length === 0) return alert("Please select at least one email.");
+    } else {
+      filters = {
+        label: document.getElementById('gmailFilterLabel').value,
+        newer_than: document.getElementById('gmailFilterTime').value
+      };
+    }
+  }
 
   if (!name) return alert("Please enter a policy name.");
 
@@ -1358,7 +1576,8 @@ window.savePolicy = async function() {
         job_type: type,
         frequency,
         start_time: startTime,
-        selected_ids: selection.length > 0 ? selection : null,
+        selected_ids: selection,
+        filters: filters,
         is_active: 1
       })
     });
@@ -1391,9 +1610,19 @@ window.fetchPolicies = async function() {
       tbody.innerHTML = data.map(p => {
         const lastRun = p.last_run ? new Date(p.last_run).toLocaleString() : 'Never';
         const typeIcon = p.job_type === 'GMAIL' ? '📧' : '☁️';
+        const methodTag = p.filters ? 
+          '<span style="font-size: 0.65rem; background: var(--accent-primary-light); color: var(--accent-primary-dark); padding: 2px 6px; border-radius: 4px; margin-left: 5px;">DYNAMIC</span>' : 
+          '<span style="font-size: 0.65rem; background: #f1f5f9; color: #475569; padding: 2px 6px; border-radius: 4px; margin-left: 5px;">MANUAL</span>';
+        
         return `
           <tr>
-            <td><div class="font-bold">${p.name}</div></td>
+            <td>
+              <div style="display: flex; align-items: center;">
+                <div class="font-bold">${p.name}</div>
+                ${methodTag}
+              </div>
+              ${p.filters ? `<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">Criteria: ${p.filters.label || 'All'} | ${p.filters.newer_than || 'All Time'}</div>` : ''}
+            </td>
             <td>
               <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <span>${typeIcon}</span>

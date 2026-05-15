@@ -93,6 +93,7 @@ def run_backup_job(job_id: int, account_id: int):
         creds = account.credentials_json
         job_type = job.job_type
         sel_ids = json.loads(job.selected_ids) if job.selected_ids else None
+        filters = json.loads(job.filters) if job.filters else None
     finally:
         db.close()
 
@@ -110,7 +111,19 @@ def run_backup_job(job_id: int, account_id: int):
         if job_type == models.JobType.GDRIVE:
             result, new_creds = loop.run_until_complete(services.backup_gdrive(creds, dest_dir, sel_ids))
         elif job_type == models.JobType.GMAIL:
-            result, new_creds = loop.run_until_complete(services.backup_gmail(creds, dest_dir, sel_ids))
+            # Construct query from filters if present
+            query = None
+            if filters:
+                q_parts = []
+                if filters.get('label'):
+                    label = filters['label']
+                    quoted_label = f'"{label}"' if ' ' in label else label
+                    q_parts.append(f"label:{quoted_label}")
+                if filters.get('newer_than'):
+                    q_parts.append(f"newer_than:{filters['newer_than']}")
+                query = " ".join(q_parts)
+                
+            result, new_creds = loop.run_until_complete(services.backup_gmail(creds, dest_dir, sel_ids, query))
         
         loop.close()
 
@@ -304,7 +317,8 @@ def automated_policy_worker():
                         account_id=policy.account_id,
                         job_type=policy.job_type,
                         status=models.JobStatus.RUNNING,
-                        selected_ids=policy.selected_ids
+                        selected_ids=policy.selected_ids,
+                        filters=policy.filters
                     )
                     db.add(new_job)
                     policy.last_run = now
@@ -355,7 +369,19 @@ def get_gmail_messages(account_id: int, query: str = None, page_token: str = Non
             db.commit()
         return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/gmail/labels/")
+def get_gmail_labels(account_id: int, db: Session = Depends(get_db)):
+    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    try:
+        labels = services.get_gmail_labels(account.credentials_json)
+        return labels
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/jobs/", response_model=schemas.JobResponse)
 def create_job(account_id: int, job: schemas.JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -388,6 +414,7 @@ def create_policy(policy: schemas.PolicyCreate, db: Session = Depends(get_db)):
         frequency=models.Frequency(policy.frequency),
         start_time=policy.start_time,
         selected_ids=json.dumps(policy.selected_ids) if policy.selected_ids else None,
+        filters=json.dumps(policy.filters) if policy.filters else None,
         is_active=policy.is_active
     )
     db.add(db_policy)
@@ -407,6 +434,17 @@ def delete_policy(policy_id: int, db: Session = Depends(get_db)):
     db.delete(policy)
     db.commit()
     return {"status": "success"}
+
+@app.get("/jobs/stats")
+def get_job_stats(db: Session = Depends(get_db)):
+    total = db.query(models.Job).filter(models.Job.job_type.in_([models.JobType.GMAIL, models.JobType.GDRIVE])).count()
+    gmail = db.query(models.Job).filter(models.Job.job_type == models.JobType.GMAIL).count()
+    drive = db.query(models.Job).filter(models.Job.job_type == models.JobType.GDRIVE).count()
+    return {
+        "total": total,
+        "gmail": gmail,
+        "drive": drive
+    }
 
 @app.get("/jobs/", response_model=List[schemas.JobResponse])
 def list_jobs(limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
