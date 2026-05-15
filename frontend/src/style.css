@@ -401,6 +401,23 @@ h1, h2, h3, h4 {
 .status-pill.pending { background: #FEF3C7; color: #92400E; }
 .status-pill.failed { background: #FEE2E2; color: #991B1B; }
 
+/* Progress Bar */
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-primary), #34D399);
+  transition: width 0.4s ease;
+  border-radius: 10px;
+}
+
 /* Modernized Action Menu */
 .action-menu {
   position: relative;

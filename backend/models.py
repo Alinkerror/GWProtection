@@ -30,6 +30,8 @@ class Job(Base):
     error_message = Column(String, nullable=True)
     selected_ids = Column(String, nullable=True) # JSON serialized list of IDs
     filters = Column(String, nullable=True) # JSON criteria
+    total_items = Column(Integer, default=0)
+    processed_items = Column(Integer, default=0)
 
 class Account(Base):
     __tablename__ = "accounts"

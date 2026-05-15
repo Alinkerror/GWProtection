@@ -414,6 +414,30 @@ async function fetchJobsAndPopulateTable() {
       tbody.innerHTML = jobsData.map(job => {
         const timeFinished = job.completed_at ? new Date(job.completed_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '-';
         const typeIcon = job.job_type === 'GMAIL' ? '📧' : '☁️';
+        
+        let statusHtml = `<span class="status-pill ${job.status.toLowerCase()}">${job.status}</span>`;
+        if (job.status === 'RUNNING' && job.total_items > 0) {
+          const percentage = Math.round((job.processed_items / job.total_items) * 100);
+          statusHtml = `
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 120px;">
+              <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-secondary);">
+                <span>${job.status}</span>
+                <span>${job.processed_items}/${job.total_items}</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: ${percentage}%"></div>
+              </div>
+            </div>
+          `;
+        } else if (job.status === 'COMPLETED' && job.total_items > 0) {
+          statusHtml = `
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span class="status-pill completed">COMPLETED</span>
+              <span style="font-size: 0.65rem; color: var(--text-muted); text-align: center;">${job.total_items} items protected</span>
+            </div>
+          `;
+        }
+
         return `
           <tr>
             <td><div class="font-bold">#${job.id}</div></td>
@@ -423,7 +447,7 @@ async function fetchJobsAndPopulateTable() {
                  <span>${job.job_type}</span>
                </div>
             </td>
-            <td><span class="status-pill ${job.status.toLowerCase()}">${job.status}</span></td>
+            <td>${statusHtml}</td>
             <td><span class="text-muted">${timeFinished}</span></td>
             <td>
               <div class="action-menu" onclick="event.stopPropagation(); toggleDropdown(${job.id})">

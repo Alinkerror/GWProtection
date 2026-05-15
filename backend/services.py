@@ -66,25 +66,29 @@ def build_creds(credentials_json: str):
         scopes=SCOPES
     )
 
-def get_user_info(credentials_json: str):
+def refresh_credentials(credentials_json: str):
+    """Refreshes credentials if expired and returns (creds, new_creds_json)"""
     creds = build_creds(credentials_json)
-    service = build('oauth2', 'v2', credentials=creds)
-    user_info = service.userinfo().get().execute()
-    return user_info
-
-def list_gdrive_files(credentials_json: str, parent_id: str = "root", page_token: str = None):
-    creds = build_creds(credentials_json)
-    
     from google.auth.transport.requests import Request
+    
+    new_creds_json = None
     if not creds.valid:
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
             new_creds_json = creds.to_json()
         else:
             raise Exception("Credentials expired and no refresh token available. Please login again.")
-    else:
-        new_creds_json = None
+            
+    return creds, new_creds_json
 
+def get_user_info(credentials_json: str):
+    creds, new_creds = refresh_credentials(credentials_json)
+    service = build('oauth2', 'v2', credentials=creds)
+    user_info = service.userinfo().get().execute()
+    return user_info, new_creds
+
+def list_gdrive_files(credentials_json: str, parent_id: str = "root", page_token: str = None):
+    creds, new_creds = refresh_credentials(credentials_json)
     service = build('drive', 'v3', credentials=creds)
     
     query = f"'{parent_id}' in parents and trashed=false"
@@ -95,20 +99,10 @@ def list_gdrive_files(credentials_json: str, parent_id: str = "root", page_token
         pageToken=page_token
     ).execute()
     
-    return results, new_creds_json
+    return results, new_creds
 
 async def backup_gdrive(credentials_json: str, destination_dir: str, selected_ids: list = None):
-    creds = build_creds(credentials_json)
-    
-    from google.auth.transport.requests import Request
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Note: For background jobs, we might not update the DB immediately here 
-            # unless we pass the DB session, but the local creds object is now valid.
-        else:
-            raise Exception("Credentials expired. Please login again.")
-
+    creds, _ = refresh_credentials(credentials_json)
     service = build('drive', 'v3', credentials=creds)
     
     async def download_item(item_id, item_name, item_mime, current_dir):
@@ -187,18 +181,7 @@ async def backup_gdrive(credentials_json: str, destination_dir: str, selected_id
     return f"Backed up structure to {destination_dir}", new_creds_json
 
 def list_gmail_messages(credentials_json: str, query_str: str = None, page_token: str = None):
-    creds = build_creds(credentials_json)
-    
-    from google.auth.transport.requests import Request
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            new_creds_json = creds.to_json()
-        else:
-            raise Exception("Credentials expired. Please login again.")
-    else:
-        new_creds_json = None
-
+    creds, new_creds = refresh_credentials(credentials_json)
     service = build('gmail', 'v1', credentials=creds)
     
     q = query_str if query_str else ""
@@ -245,19 +228,19 @@ def list_gmail_messages(credentials_json: str, query_str: str = None, page_token
     
     batch.execute()
             
-    return {"messages": [m for m in hydrated_messages if m is not None], "nextPageToken": next_page_token}, new_creds_json
+    return {"messages": [m for m in hydrated_messages if m is not None], "nextPageToken": next_page_token}, new_creds
 
 def get_gmail_labels(credentials_json: str):
-    creds = build_creds(credentials_json)
+    creds, new_creds = refresh_credentials(credentials_json)
     service = build('gmail', 'v1', credentials=creds)
     results = service.users().labels().list(userId='me').execute()
     labels = results.get('labels', [])
     
     # Filter for useful labels (System and User)
-    return [{"id": l['id'], "name": l['name'], "type": l['type']} for l in labels]
+    return [{"id": l['id'], "name": l['name'], "type": l['type']} for l in labels], new_creds
 
-async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids: list = None, query: str = None):
-    creds = build_creds(credentials_json)
+async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids: list = None, query: str = None, on_progress: callable = None):
+    creds, _ = refresh_credentials(credentials_json)
     service = build('gmail', 'v1', credentials=creds)
     
     ids_to_backup = selected_ids or []
@@ -271,6 +254,9 @@ async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids
     if not ids_to_backup:
         return 0
 
+    if on_progress:
+        on_progress(total=len(ids_to_backup))
+
     os.makedirs(destination_dir, exist_ok=True)
     count = 0
     
@@ -283,17 +269,22 @@ async def backup_gmail(credentials_json: str, destination_dir: str, selected_ids
             with open(os.path.join(destination_dir, f"{msg_id}.eml"), 'wb') as f:
                 f.write(msg_bytes)
             count += 1
+            if on_progress:
+                on_progress(current=count)
         except Exception:
             pass
             
     return count
 
-async def backup_gdrive(credentials_json: str, destination_dir: str, selected_ids: list = None):
+async def backup_gdrive(credentials_json: str, destination_dir: str, selected_ids: list = None, on_progress: callable = None):
     creds = build_creds(credentials_json)
     service = build('drive', 'v3', credentials=creds)
     
     if not selected_ids:
         return 0
+
+    if on_progress:
+        on_progress(total=len(selected_ids))
 
     os.makedirs(destination_dir, exist_ok=True)
     count = 0
@@ -307,6 +298,8 @@ async def backup_gdrive(credentials_json: str, destination_dir: str, selected_id
             with open(file_path, 'wb') as f:
                 f.write(request.execute())
             count += 1
+            if on_progress:
+                on_progress(current=count)
         except Exception:
             pass
             

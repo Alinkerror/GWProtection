@@ -45,7 +45,7 @@ def exchange_code(code: str, email: str, redirect_uri: str, db: Session = Depend
     try:
         creds_json = services.exchange_code(code, redirect_uri)
         # Fetch user profile info
-        user_info = services.get_user_info(creds_json)
+        user_info, _ = services.get_user_info(creds_json)
         name = user_info.get('name')
         picture = user_info.get('picture')
     except Exception as e:
@@ -98,18 +98,36 @@ def run_backup_job(job_id: int, account_id: int):
         db.close()
 
     # 2. Run the actual backup (This is blocking work, but it's in a separate thread)
-    dest_dir = os.path.join("backups", str(account_id), f"{job_type.value}_{job_id}")
+    # Use a nested function for progress updates to keep a clean session
+    def update_progress(total=None, current=None):
+        prog_db = SessionLocal()
+        try:
+            job_obj = prog_db.query(models.Job).filter(models.Job.id == job_id).first()
+            if job_obj:
+                if total is not None: job_obj.total_items = total
+                if current is not None: job_obj.processed_items = current
+                prog_db.commit()
+        except Exception as e:
+            print(f"Error updating progress for job {job_id}: {e}")
+        finally:
+            prog_db.close()
+
+    dest_dir = os.path.join(BACKUP_ROOT, str(account_id), f"{job_type.value}_{job_id}")
     os.makedirs(dest_dir, exist_ok=True)
     
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        result = ""
-        new_creds = None
+        count = 0
         
         if job_type == models.JobType.GDRIVE:
-            result, new_creds = loop.run_until_complete(services.backup_gdrive(creds, dest_dir, sel_ids))
+            count = loop.run_until_complete(services.backup_gdrive(
+                creds, 
+                dest_dir, 
+                sel_ids,
+                on_progress=update_progress
+            ))
         elif job_type == models.JobType.GMAIL:
             # Construct query from filters if present
             query = None
@@ -123,7 +141,13 @@ def run_backup_job(job_id: int, account_id: int):
                     q_parts.append(f"newer_than:{filters['newer_than']}")
                 query = " ".join(q_parts)
                 
-            result, new_creds = loop.run_until_complete(services.backup_gmail(creds, dest_dir, sel_ids, query))
+            count = loop.run_until_complete(services.backup_gmail(
+                creds, 
+                dest_dir, 
+                sel_ids, 
+                query,
+                on_progress=update_progress
+            ))
         
         loop.close()
 
@@ -131,16 +155,11 @@ def run_backup_job(job_id: int, account_id: int):
         db = SessionLocal()
         try:
             job = db.query(models.Job).filter(models.Job.id == job_id).first()
-            account = db.query(models.Account).filter(models.Account.id == account_id).first()
-            
             if job:
                 job.status = models.JobStatus.COMPLETED
                 job.destination_path = dest_dir
                 job.completed_at = func.now()
-            
-            if account and new_creds:
-                account.credentials_json = new_creds
-                
+                job.processed_items = count # Final sync
             db.commit()
         finally:
             db.close()
@@ -282,57 +301,72 @@ def automated_cleanup_worker():
 
 def automated_policy_worker():
     """Background thread to check for scheduled policies every minute."""
+    print("Policy automation worker started.")
     while True:
         db = SessionLocal()
         try:
             now = datetime.now()
             current_time_str = now.strftime("%H:%M")
             
-            # Find active policies that match current time
-            policies = db.query(models.Policy).filter(
-                models.Policy.is_active == 1,
-                models.Policy.start_time == current_time_str
-            ).all()
+            # Find all active policies
+            policies = db.query(models.Policy).filter(models.Policy.is_active == 1).all()
             
             for policy in policies:
-                # Check frequency
-                should_run = False
-                if not policy.last_run:
-                    should_run = True
-                else:
-                    # Simple daily check: has it run today?
-                    if policy.frequency == models.Frequency.DAILY:
-                        if policy.last_run.date() < now.date():
-                            should_run = True
-                    elif policy.frequency == models.Frequency.WEEKLY:
-                        if policy.last_run < now - timedelta(days=7):
-                            should_run = True
-                    elif policy.frequency == models.Frequency.MONTHLY:
-                        if policy.last_run < now - timedelta(days=30):
-                            should_run = True
-                
-                if should_run:
-                    print(f"Triggering automated policy: {policy.name}")
-                    new_job = models.Job(
-                        account_id=policy.account_id,
-                        job_type=policy.job_type,
-                        status=models.JobStatus.RUNNING,
-                        selected_ids=policy.selected_ids,
-                        filters=policy.filters
-                    )
-                    db.add(new_job)
-                    policy.last_run = now
-                    db.commit()
-                    db.refresh(new_job)
+                try:
+                    # Parse start_time (HH:MM)
+                    start_h, start_m = map(int, policy.start_time.split(':'))
                     
-                    # Start the job
-                    threading.Thread(target=run_backup_job, args=(new_job.id, policy.account_id)).start()
+                    # Calculate the "scheduled run time" for today
+                    scheduled_today = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                    
+                    should_run = False
+                    
+                    # 1. If it's already past the scheduled time today
+                    if now >= scheduled_today:
+                        # 2. Check if it has run today yet
+                        if not policy.last_run or policy.last_run < scheduled_today:
+                            # 3. Frequency checks
+                            if policy.frequency == models.Frequency.DAILY:
+                                should_run = True
+                            elif policy.frequency == models.Frequency.WEEKLY:
+                                if not policy.last_run or policy.last_run < scheduled_today - timedelta(days=7):
+                                    should_run = True
+                            elif policy.frequency == models.Frequency.MONTHLY:
+                                if not policy.last_run or policy.last_run < scheduled_today - timedelta(days=30):
+                                    should_run = True
+                    
+                    if should_run:
+                        print(f"Triggering automated policy: {policy.name} (Account: {policy.account_id})")
+                        new_job = models.Job(
+                            account_id=policy.account_id,
+                            job_type=policy.job_type,
+                            status=models.JobStatus.RUNNING,
+                            selected_ids=policy.selected_ids,
+                            filters=policy.filters,
+                            destination_path=os.path.join(BACKUP_ROOT, f"account_{policy.account_id}", f"policy_{policy.id}_{int(now.timestamp())}")
+                        )
+                        db.add(new_job)
+                        policy.last_run = now
+                        db.commit()
+                        db.refresh(new_job)
+                        
+                        # Start the job in a new thread
+                        threading.Thread(target=run_backup_job, args=(new_job.id, policy.account_id)).start()
+                except Exception as policy_err:
+                    print(f"Error processing policy {policy.id}: {policy_err}")
                     
         except Exception as e:
-            print(f"Policy worker error: {str(e)}")
+            print(f"Policy worker main loop error: {str(e)}")
+            import traceback
+            traceback.print_exc()
         finally:
             db.close()
-        time.sleep(60)
+        
+        # Sleep until the start of the next minute to prevent drift
+        now = datetime.now()
+        seconds_to_wait = 60 - now.second
+        if seconds_to_wait <= 0: seconds_to_wait = 60
+        time.sleep(seconds_to_wait)
 
 @app.on_event("startup")
 def startup_event():
@@ -378,7 +412,10 @@ def get_gmail_labels(account_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Account not found")
     
     try:
-        labels = services.get_gmail_labels(account.credentials_json)
+        labels, new_creds = services.get_gmail_labels(account.credentials_json)
+        if new_creds:
+            account.credentials_json = new_creds
+            db.commit()
         return labels
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
